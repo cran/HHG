@@ -37,6 +37,8 @@
 using namespace std;
 
 static int get_available_nr_threads(void);
+static void count_unique_y(int n, double* y, ExtraParams& extra_params);
+
 #ifndef R_INTERFACE
 static void read_data_file(ifstream& ifs, int skp_first_lines, int skp_first_fields, int n, int m, double* buf);
 static void compute_01_distances(int n, int p, double* v, double *dv);
@@ -257,37 +259,93 @@ SEXP HHG(SEXP R_test_type, SEXP R_dx, SEXP R_dy, SEXP R_y,
 		int n = INTEGER(Rdim)[0];
 		int y_ncol = INTEGER(Rdim)[1];
 
-		double sum_chi, sum_like, max_chi, max_like, ht, edist;
-		double p_sum_chi, p_sum_like, p_max_chi, p_max_like, p_ht, p_edist;
-		SequentialTest seq((TestType)test_type, n, y_ncol, dx, dy, y, w_sum, w_max, extra_params, is_sequential, alpha, alpha0, beta0, eps, nr_perm, nr_threads, 0, tables_wanted, perm_stats_wanted);
+		//
+		// Test type and any specific parameters:
+		//
+
+		// FIXME I'll have to clean this up at some point...
+
+		TestType tt = (TestType)test_type;
+		ExtraParams parsed_extra_params;
+
+		parsed_extra_params.w_sum = w_sum;
+		parsed_extra_params.w_max = w_max;
+
+		if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST) {
+			count_unique_y(n, y, parsed_extra_params);
+		}
+
+		if (tt == UDF_DDP_OBS || tt == UDF_DDP_ALL) {
+			parsed_extra_params.K = extra_params[0];
+			parsed_extra_params.correct_mi_bias = extra_params[1];
+		} else if (tt == CI_UVZ_NN || tt == CI_MVZ_NN) {
+			parsed_extra_params.nnh = extra_params[0];
+			parsed_extra_params.nnh_lsb = extra_params[1];
+		} else if (tt == CI_UVZ_GAUSSIAN || tt == CI_MVZ_GAUSSIAN) {
+			parsed_extra_params.sig = extra_params[0];
+			parsed_extra_params.nnh_lsb = extra_params[1];
+		} else if (tt == CI_UDF_ADP_MVZ_NN) {
+			parsed_extra_params.K = extra_params[0];
+			parsed_extra_params.correct_mi_bias = extra_params[1];
+			parsed_extra_params.nnh = extra_params[2];
+			parsed_extra_params.nnh_lsb = extra_params[3];
+		} else if (tt == CI_MVZ_NN_GRID_BW) {
+			parsed_extra_params.nnh_grid_cnt = extra_params[0];
+			parsed_extra_params.nnh_lsb = extra_params[1];
+			parsed_extra_params.nnh_grid = new int[parsed_extra_params.nnh_grid_cnt];
+			for (int i = 0; i < parsed_extra_params.nnh_grid_cnt; ++i) {
+				parsed_extra_params.nnh_grid[i] = extra_params[2 + i];
+			}
+		}
+
+		//
+		// Showtime
+		//
+
+		SequentialTest seq(tt, n, y_ncol, dx, dy, y, parsed_extra_params, is_sequential, alpha, alpha0, beta0, eps, nr_perm, nr_threads, 0, tables_wanted, perm_stats_wanted);
+
+		//
+		// Organize results
+		//
+
+		int total_nr_stats = 6;
+		if (tt == CI_MVZ_NN_GRID_BW) {
+			total_nr_stats += 4 * parsed_extra_params.nnh_grid_cnt;
+		}
+
+		int res_pvals_offset = 0;
+		int res_obs_stats_offest = total_nr_stats;
+		int res_tables_offset = total_nr_stats * 2;
+		int res_tables_size = 4 * n * n * tables_wanted;
+		int res_perm_stats_offset = res_tables_offset + res_tables_size;
+		int res_perm_stats_size = total_nr_stats * nr_perm * perm_stats_wanted;
+		int res_size = total_nr_stats * 2 + res_tables_size + res_perm_stats_size;
 
 		SEXP R_res;
-		PROTECT(R_res = allocMatrix(REALSXP, 12 + 4 * n * n * tables_wanted + 6 * nr_perm * perm_stats_wanted, 1));
+		PROTECT(R_res = allocMatrix(REALSXP, res_size, 1));
 		double* res = REAL(R_res);
 
-		seq.get_observed_stats(sum_chi, sum_like, max_chi, max_like, ht, edist);
-		seq.get_pvalues(p_sum_chi, p_sum_like, p_max_chi, p_max_like, p_ht, p_edist);
-
-		res[0] = p_sum_chi;
-		res[1] = p_sum_like;
-		res[2] = p_max_chi;
-		res[3] = p_max_like;
-		res[4] = p_ht;
-		res[5] = p_edist;
-
-		res[ 6] = sum_chi;
-		res[ 7] = sum_like;
-		res[ 8] = max_chi;
-		res[ 9] = max_like;
-		res[10] = ht;
-		res[11] = edist;
+		seq.get_pvalues(res + res_pvals_offset);
+		seq.get_observed_stats(res + res_obs_stats_offest);
 
 		if (tables_wanted) {
-			seq.get_observed_tables(res + 12);
+			seq.get_observed_tables(res + res_tables_offset);
 		}
 
 		if (perm_stats_wanted) {
-			seq.get_perm_stats(res + 12 + 4 * n * n * tables_wanted);
+			seq.get_perm_stats(res + res_perm_stats_offset);
+		}
+
+		//
+		// Cleanup
+		//
+
+		if (parsed_extra_params.y_counts != NULL) {
+			delete[] parsed_extra_params.y_counts;
+		}
+
+		if (tt == CI_MVZ_NN_GRID_BW) {
+			delete[] parsed_extra_params.nnh_grid;
 		}
 
 		UNPROTECT(1);
@@ -613,6 +671,24 @@ static int get_available_nr_threads(void) {
 	return (sysconf(_SC_NPROCESSORS_ONLN));
 #endif
 #endif
+}
+
+static void count_unique_y(int n, double* y, ExtraParams& extra_params) {
+	int K = 0;
+	for (int i = 0; i < n; ++i) {
+		K = max(K, (int)(y[i]));
+	}
+	K = max(2, K + 1);
+	extra_params.K = K;
+
+	extra_params.y_counts = new int[K];
+	for (int k = 0; k < K; ++k) {
+		extra_params.y_counts[k] = 0;
+	}
+
+	for (int i = 0; i < n; ++i) {
+		++extra_params.y_counts[(int)(y[i])];
+	}
 }
 
 #ifndef R_INTERFACE

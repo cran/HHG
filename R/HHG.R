@@ -1,24 +1,9 @@
 # Main R file for the Heller-Heller-Gorfine test package
 
-.NO_TIES_TEST     = as.integer(2)
-.GENERAL_TEST     = as.integer(3)
-.UDF_SPR_OBS      = as.integer(4)
-.UDF_SPR_ALL      = as.integer(5)
-.UDF_PPR_22_OBS   = as.integer(6)
-.UDF_PPR_22_ALL   = as.integer(7)
-.UDF_PPR_33_OBS   = as.integer(8)
-.UDF_PPR_33_ALL   = as.integer(9)
-.UDF_TPR_OBS      = as.integer(10)
-.UDF_TPR_ALL      = as.integer(11)
-.UDF_SPPR_OBS     = as.integer(12)
-.UDF_SPPR_ALL     = as.integer(13)
-.UDF_DDP_OBS      = as.integer(14)
-.UDF_DDP_ALL      = as.integer(15)
-
 # The general test of independence (with or without handling of ties)
 hhg.test = function(Dx, Dy, ties = T, w.sum = 0, w.max = 2, nr.perm = 10000, 
-                    total.nr.tests = 1, is.sequential = T, alpha.hyp = NULL, alpha0 = NULL, beta0 = NULL, eps = NULL, 
-                    nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
+  total.nr.tests = 1, is.sequential = T, alpha.hyp = NULL, alpha0 = NULL, beta0 = NULL, eps = NULL, 
+  nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
 {
   # Argument checking is negligent at this point...
   if (!is.double(Dx) || !is.double(Dy) || !is.matrix(Dx) || !is.matrix(Dy) || 
@@ -39,76 +24,77 @@ hhg.test = function(Dx, Dy, ties = T, w.sum = 0, w.max = 2, nr.perm = 10000,
   }
 
   dummy.y = matrix(0, nrow(Dy), 1)
-  
   extra_params = as.double(0)
-  
   is_sequential = as.integer(is.sequential)
-  if (!is.sequential) {
-    total.nr.tests = 1 # just so that we set Wald parameters to *something* so we can pass them on to C
-  }
+
+  wald = .configure.wald.sequential(total.nr.tests, is.sequential, alpha.hyp, alpha0, beta0, eps)
+  alpha_hyp = as.double(wald$alpha.hyp)
+  alpha0 = as.double(wald$alpha0)
+  beta0 = as.double(wald$beta0)
+  eps = as.double(wald$eps)
   
-  if (!is.null(total.nr.tests)) {
-    if (total.nr.tests < 1) {
-      stop('total.nr.tests should be at least 1')
-    }
-    
-    alpha.hyp = 0.05 / max(1, log(total.nr.tests))
-    alpha0 = 0.05
-    beta0 = min(0.01, 0.05 / total.nr.tests)
-    eps = 0.01
-  } else if (any(is.null(c(alpha.hyp, alpha0, beta0, eps)))) {
-    stop('Either total.nr.tests or all of {alpha.hyp, alpha0, beta0, eps} must be specified (i.e. be non-null).')
-  }
-
-  alpha_hyp = as.double(alpha.hyp)
-  alpha0 = as.double(alpha0)
-  beta0 = as.double(beta0)
-  eps = as.double(eps)
-
   nr_perm = as.integer(nr.perm)
   nr_threads = as.integer(nr.threads)
   tables_wanted = as.integer(tables.wanted)
   perm_stats_wanted = as.integer(perm.stats.wanted)
   
   res = .Call('HHG', test_type, Dx, Dy, dummy.y, w.sum, w.max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
-  
-  if (tables.wanted) {
-    n = nrow(Dx)
-    tbls = res[12 + (1:(4 * n^2))]
-    tbls[tbls == -42] = NA
-    tbls.df = data.frame(matrix(tbls, nrow = n^2, ncol = 4))
-    names(tbls.df) = c('A11', 'A12', 'A21', 'A22')
-  } else {
-    tbls.df = NULL
-  }
-  
-  if (perm.stats.wanted) {
-    n = nrow(Dx)
-    ps = data.frame(matrix(res[12 + 4 * n^2 * tables.wanted + (1:(6 * nr.perm))], nrow = nr.perm, ncol = 6))
-    names(ps) = c('sc', 'sl', 'mc', 'ml', 'ht', 'edist')
-  } else {
-    ps = NULL
-  }
-  
-  return (list(sum.chisq = res[7], sum.lr = res[8], 
-               max.chisq = res[9], max.lr = res[10],
-               perm.pval.hhg.sc = res[1], perm.pval.hhg.sl = res[2], 
-               perm.pval.hhg.mc = res[3], perm.pval.hhg.ml = res[4],
-               extras.edist = NA, extras.ht = res[11],
-               extras.perm.pval.edist = NA, extras.perm.pval.ht = res[5],
-               extras.hhg.tbls = tbls.df, extras.perm.stats = ps))
+  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0, extra.stats.wanted = T)
+  return (ret)
 }
 
 # The univariate distribution-free test
-xdp.test = function(x, y, variant = 'ppr.33.obs', K = 3, correct.mi.bias = F) {
-  res = .hhg.test.udfree(x = x, y = y, variant = variant, K = K, correct.mi.bias = correct.mi.bias)
-  return (list(sum.chisq = res$sum.chisq, sum.lr = res$sum.lr, max.chisq = res$max.chisq, max.lr = res$max.lr))
+xdp.test = function(x, y, variant = 'DDP', K = 3, correct.mi.bias = F, 
+  w.sum = 0, w.max = 2) 
+{
+  if (variant == 'DDP') {
+    if (K != as.integer(K) || K < 2) {
+      stop('K must be an integer greater than 1')
+    } else if (K == 2) {
+      x.variant = 'spr.obs'
+    } else if (K == 3) {
+      x.variant = 'ppr.33.obs'
+    } else if (K == 4) {
+      x.variant = 'tpr.obs'
+    } else {
+      x.variant = 'ddp.obs'
+    }
+  } else if (variant == 'ADP') {
+    if (K != as.integer(K) || K < 2) {
+      stop('K must be an integer greater than 1')
+    } else if (K == 2) {
+      x.variant = 'spr.all'
+    } else if (K == 3) {
+      # One could use 'ppr.33.all' that has the same complexity, but in practice it is much slower
+      x.variant = 'ddp.all'
+    } else if (K == 4) {
+      # tpr.all is too time consuming
+      x.variant = 'ddp.all'
+    } else {
+      x.variant = 'ddp.all'
+    }
+  }
+
+  ret = .hhg.test.udfree(x = x, y = y, variant = x.variant, K = K, correct.mi.bias = correct.mi.bias)
+  
+  if (((variant == 'DDP') && (K > 4)) || ((variant == 'ADP') && (K > 2))) {
+    ret$max.chisq = NA
+    ret$max.lr    = NA
+
+    if (!is.null(ret$perm.pval.hhg.mc)) {
+      ret$perm.pval.hhg.mc = NA
+      ret$perm.pval.hhg.ml = NA
+    }
+  }
+    
+  return (ret)
 }
 
 # (I'm keeping the old interface because some big simulations rely on it)
-.hhg.test.udfree = function(x, y, variant = 'ppr.33.obs', nr.perm = 0, K = 3, correct.mi.bias = F,
-                           total.nr.tests = 1, is.sequential = T, alpha.hyp = NULL, alpha0 = NULL, beta0 = NULL, eps = NULL, 
-                           nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
+.hhg.test.udfree = function(x, y, variant = 'ppr.33.obs', w.sum = 0, w.max = 2,
+  nr.perm = 0, K = 3, correct.mi.bias = F, total.nr.tests = 1, 
+  is.sequential = T, alpha.hyp = NULL, alpha0 = NULL, beta0 = NULL, eps = NULL, 
+  nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
 {
   # Argument checking is negligent at this point...
   if (!is.vector(y)) {
@@ -162,73 +148,33 @@ xdp.test = function(x, y, variant = 'ppr.33.obs', K = 3, correct.mi.bias = F) {
   Dx = as.matrix(as.double(rank(x, ties.method = 'random')), nrow = length(x), ncol = 1)
   y = as.matrix(as.double(rank(y, ties.method = 'random')), nrow = length(y), ncol = 1)
 
-  # Dy is used to store x.sorted.by.y (first column), and y.sorted.by.x (second column)
+  # For DDP, Dy is used to store x.sorted.by.y (first column), and y.sorted.by.x (second column)
   if (variant == 'ddp.obs' || variant == 'ddp.all') {
-    Dy = cbind(Dx[order(y)], y[order(x)])
+    Dy = cbind(Dx[order(y)], y[order(Dx)])
   } else {
     Dx = Dx - 1
     Dy = 0
     y = y - 1
   }
   
-  w.sum = 0
-  w.max = 2
+  w_sum = as.double(w.sum)
+  w_max = as.double(w.max)
 
   extra_params = as.double(c(K, correct.mi.bias))
-  
   is_sequential = as.integer(is.sequential)
-  if (!is.sequential) {
-    total.nr.tests = 1 # just so that we set Wald parameters to *something* so we can pass them on to C
-  }
+
+  wald = .configure.wald.sequential(total.nr.tests, is.sequential, alpha.hyp, alpha0, beta0, eps)
+  alpha_hyp = as.double(wald$alpha.hyp)
+  alpha0 = as.double(wald$alpha0)
+  beta0 = as.double(wald$beta0)
+  eps = as.double(wald$eps)
   
-  if (!is.null(total.nr.tests)) {
-    if (total.nr.tests < 1) {
-      stop('total.nr.tests should be at least 1')
-    }
-    
-    alpha_hyp = 0.05 / max(1, log(total.nr.tests))
-    alpha0 = 0.05
-    beta0 = min(0.01, 0.05 / total.nr.tests)
-    eps = 0.01
-  } else if (any(is.null(c(alpha.hyp, alpha0, beta0, eps)))) {
-    stop('Either total.nr.tests or all of {alpha.hyp, alpha0, beta0, eps} must be specified (i.e. be non-null).')
-  }
-
-  alpha_hyp = as.double(alpha.hyp)
-  alpha0 = as.double(alpha0)
-  beta0 = as.double(beta0)
-  eps = as.double(eps)
-
   nr_perm = as.integer(nr.perm)
   nr_threads = as.integer(nr.threads)
   tables_wanted = as.integer(tables.wanted)
   perm_stats_wanted = as.integer(perm.stats.wanted)
   
-  res = .Call('HHG', test_type, Dx, Dy, y, w.sum, w.max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
-
-  if (tables.wanted) {
-    n = nrow(Dx)
-    tbls = res[12 + (1:(4 * n^2))]
-    tbls[tbls == -42] = NA
-    tbls.df = data.frame(matrix(tbls, nrow = n^2, ncol = 4))
-    names(tbls.df) = c('A11', 'A12', 'A21', 'A22')
-  } else {
-    tbls.df = NULL
-  }
-  
-  if (perm.stats.wanted) {
-    n = nrow(Dx)
-    ps = data.frame(matrix(res[12 + 4 * n^2 * tables.wanted + (1:(6 * nr.perm))], nrow = nr.perm, ncol = 6))
-    names(ps) = c('sc', 'sl', 'mc', 'ml', 'ht', 'edist')
-  } else {
-    ps = NULL
-  }
-  
-  return (list(sum.chisq = res[7], sum.lr = res[8], 
-               max.chisq = res[9], max.lr = res[10],
-               perm.pval.hhg.sc = res[1], perm.pval.hhg.sl = res[2], 
-               perm.pval.hhg.mc = res[3], perm.pval.hhg.ml = res[4],
-               extras.edist = res[12], extras.ht = res[11],
-               extras.perm.pval.edist = res[6], extras.perm.pval.ht = res[5],
-               extras.hhg.tbls = tbls.df, extras.perm.stats = ps))
+  res = .Call('HHG', test_type, Dx, Dy, y, w_sum, w_max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
+  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0, extra.stats.wanted = F)
+  return (ret)
 }

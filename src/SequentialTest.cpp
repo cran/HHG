@@ -51,9 +51,9 @@ static void* compute_permutations_thread(void* arg) {
 // ================================================================================================
 
 SequentialTest::SequentialTest(TestType tt, int xy_nrow, int y_ncol, double* dx, double* dy, double* y,
-		double w_sum, double w_max, double* extra_params,
+		ExtraParams& extra_params,
 		bool is_sequential, double alpha, double alpha0, double beta0, double eps, int nr_perm,
-		int nr_threads, int base_seed, bool tables_wanted, bool perm_stats_wanted)
+		int nr_threads, int base_seed, bool tables_wanted, bool perm_stats_wanted) : extra_params(extra_params)
 {
 	// NOTE: Everything is done in the constructor.
 	this->tt = tt;
@@ -63,16 +63,7 @@ SequentialTest::SequentialTest(TestType tt, int xy_nrow, int y_ncol, double* dx,
 	this->dx = dx;
 	this->dy = dy;
 	this->y = y;
-
-	this->extra_params.w_sum = w_sum;
-	this->extra_params.w_max = w_max;
-
-	if (tt == UDF_DDP_OBS || tt == UDF_DDP_ALL) {
-		this->extra_params.K = extra_params[0];
-		this->extra_params.correct_mi_bias = extra_params[1];
-	} else if (tt == CI_NN) {
-		this->extra_params.K = extra_params[0];
-	}
+	this->dz = y; // an alias for readability, used by some of the CI tests
 
 	this->is_sequential = is_sequential;
 
@@ -92,6 +83,14 @@ SequentialTest::SequentialTest(TestType tt, int xy_nrow, int y_ncol, double* dx,
 #ifndef _WIN32
 	srand(base_seed);
 #endif
+
+	if (tt == CI_MVZ_NN_GRID_BW) {
+		int nnh_cnt = extra_params.nnh_grid_cnt;
+		obs_sum_chi_grid  = new double[nnh_cnt];
+		obs_sum_like_grid = new double[nnh_cnt];
+		obs_max_chi_grid  = new double[nnh_cnt];
+		obs_max_like_grid = new double[nnh_cnt];
+	}
 
 	double p0 = this->alpha * (1 + this->eps);
 	double p1 = this->alpha * (1 - this->eps);
@@ -117,8 +116,6 @@ SequentialTest::SequentialTest(TestType tt, int xy_nrow, int y_ncol, double* dx,
 		perm_counter[i] = 0;
 	}
 
-	this->extra_params.y_counts = NULL;
-
 	this->tables_wanted = tables_wanted;
 	if (tables_wanted) {
 		obs_tbls = new int[4 * xy_nrow * xy_nrow];
@@ -128,7 +125,9 @@ SequentialTest::SequentialTest(TestType tt, int xy_nrow, int y_ncol, double* dx,
 	}
 
 	this->perm_stats_wanted = (perm_stats_wanted && (this->nr_perm > 1));
-	this->orig_nr_perm = nr_perm;
+	orig_nr_perm = nr_perm;
+	perm_serial = 0;
+
 	if (perm_stats_wanted) {
 		perm_sum_chi_v 	= new double[this->nr_perm - 1];
 		perm_sum_like_v = new double[this->nr_perm - 1];
@@ -136,6 +135,14 @@ SequentialTest::SequentialTest(TestType tt, int xy_nrow, int y_ncol, double* dx,
 		perm_max_like_v = new double[this->nr_perm - 1];
 		perm_ht_v 		= new double[this->nr_perm - 1];
 		perm_edist_v 	= new double[this->nr_perm - 1];
+
+		if (tt == CI_MVZ_NN_GRID_BW) {
+			int nnh_cnt = extra_params.nnh_grid_cnt;
+			perm_sum_chi_grid_m  = new double[nnh_cnt * (this->nr_perm - 1)];
+			perm_sum_like_grid_m = new double[nnh_cnt * (this->nr_perm - 1)];
+			perm_max_chi_grid_m  = new double[nnh_cnt * (this->nr_perm - 1)];
+			perm_max_like_grid_m = new double[nnh_cnt * (this->nr_perm - 1)];
+		}
 	}
 
 	pthread_mutex_init(&mutex, NULL);
@@ -144,29 +151,52 @@ SequentialTest::SequentialTest(TestType tt, int xy_nrow, int y_ncol, double* dx,
 }
 
 SequentialTest::~SequentialTest() {
+	if (tt == CI_MVZ_NN_GRID_BW) {
+		delete[] obs_sum_chi_grid;
+		delete[] obs_sum_like_grid;
+		delete[] obs_max_chi_grid;
+		delete[] obs_max_like_grid;
+	}
+
 	delete[] llr;
 	delete[] pvalc;
 	delete[] stopped_high;
 	delete[] stopped_low;
 	delete[] perm_counter;
+
+	if (perm_stats_wanted) {
+		delete[] perm_sum_chi_v;
+		delete[] perm_sum_like_v;
+		delete[] perm_max_chi_v;
+		delete[] perm_max_like_v;
+		delete[] perm_ht_v;
+		delete[] perm_edist_v;
+
+		if (tt == CI_MVZ_NN_GRID_BW) {
+			delete[] perm_sum_chi_grid_m;
+			delete[] perm_sum_like_grid_m;
+			delete[] perm_max_chi_grid_m;
+			delete[] perm_max_like_grid_m;
+		}
+	}
+
 	pthread_mutex_destroy(&mutex);
 }
 
 void SequentialTest::run() {
-	if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST) {
-		count_unique_y();
-	}
-
-	if (!IS_UDF_TEST(tt)) {
-		// Sort distances
+	// Sort distances
+	if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST || tt == NO_TIES_TEST || tt == GENERAL_TEST) {
 		sort_x_distances_per_row();
 		sort_y_distances_per_row();
+	}
+	if (IS_CI_MVZ_TEST(tt)) {
+		sort_z_distances_per_row();
 	}
 
 	// Instantiate one StatsComputer object per thread
 	scs = new StatsComputer*[nr_threads];
 	for (int t = 0; t < nr_threads; ++t) {
-		scs[t] = new StatsComputer(tt, xy_nrow, y_ncol, dx, dy, y, &sorted_dx, &sorted_dy, extra_params);
+		scs[t] = new StatsComputer(tt, xy_nrow, y_ncol, dx, dy, y, &sorted_dx, &sorted_dy, &sorted_dz, &extra_params);
 	}
 
 	// Compute observed statistics
@@ -175,7 +205,9 @@ void SequentialTest::run() {
 	} else {
 		scs[0]->compute();
 	}
+
 	scs[0]->get_stats(obs_sum_chi, obs_sum_like, obs_max_chi, obs_max_like, obs_ht, obs_edist);
+	scs[0]->get_grid_stats(obs_sum_chi_grid, obs_sum_like_grid, obs_max_chi_grid, obs_max_like_grid);
 
 #ifdef ST_DEBUG_PRINTS
 	cout << "Observed stats: " << obs_sum_chi << " " << obs_sum_like << " " << obs_max_chi << " " << obs_max_like << " " << obs_ht << " " << obs_edist << endl;
@@ -186,23 +218,45 @@ void SequentialTest::run() {
 		stop_all_flag = false;
 
 #ifdef NO_THREADS
+		double perm_sum_chi, perm_sum_like, perm_max_chi, perm_max_like, perm_ht, perm_edist;
+	    double *perm_sum_chi_grid = NULL, *perm_sum_like_grid = NULL, *perm_max_chi_grid = NULL, *perm_max_like_grid = NULL;
+
+	    if (tt == CI_MVZ_NN_GRID_BW) {
+	    	perm_sum_chi_grid  = new double[extra_params.nnh_grid_cnt];
+	    	perm_sum_like_grid = new double[extra_params.nnh_grid_cnt];
+	    	perm_max_chi_grid  = new double[extra_params.nnh_grid_cnt];
+	    	perm_max_like_grid = new double[extra_params.nnh_grid_cnt];
+	    }
+
 		for (int k = 0; k < nr_perm - 1; ++k) {
 			scs[0]->permute_and_compute();
 
-			double perm_sum_chi, perm_sum_like, perm_max_chi, perm_max_like, perm_ht, perm_edist;
 			scs[0]->get_stats(perm_sum_chi, perm_sum_like, perm_max_chi, perm_max_like, perm_ht, perm_edist);
+			scs[0]->get_grid_stats(perm_sum_chi_grid, perm_sum_like_grid, perm_max_chi_grid, perm_max_like_grid);
 
 #ifdef ST_DEBUG_PRINTS
 			cout << "Perm " << k << " stats: " << perm_sum_chi << " " << perm_sum_like << " " << perm_max_chi << " " << perm_max_like << " " << perm_ht << " " << perm_edist << endl;
 #endif
 
 			if (perm_stats_wanted) {
-				perm_sum_chi_v [perm_counter[0]] = perm_sum_chi;
-				perm_sum_like_v[perm_counter[1]] = perm_sum_like;
-				perm_max_chi_v [perm_counter[2]] = perm_max_chi;
-				perm_max_like_v[perm_counter[3]] = perm_max_like;
-				perm_ht_v      [perm_counter[4]] = perm_ht;
-				perm_edist_v   [perm_counter[5]] = perm_edist;
+				perm_sum_chi_v [perm_serial] = perm_sum_chi;
+				perm_sum_like_v[perm_serial] = perm_sum_like;
+				perm_max_chi_v [perm_serial] = perm_max_chi;
+				perm_max_like_v[perm_serial] = perm_max_like;
+				perm_ht_v      [perm_serial] = perm_ht;
+				perm_edist_v   [perm_serial] = perm_edist;
+
+			    if (tt == CI_MVZ_NN_GRID_BW) {
+			    	int nnh_cnt = extra_params.nnh_grid_cnt;
+			    	for (int grid_i = 0; grid_i < nnh_cnt; ++grid_i) {
+			    		perm_sum_chi_grid_m [perm_serial * nnh_cnt + grid_i] = perm_sum_chi_grid [grid_i];
+			    		perm_sum_like_grid_m[perm_serial * nnh_cnt + grid_i] = perm_sum_like_grid[grid_i];
+			    		perm_max_chi_grid_m [perm_serial * nnh_cnt + grid_i] = perm_max_chi_grid [grid_i];
+			    		perm_max_like_grid_m[perm_serial * nnh_cnt + grid_i] = perm_max_like_grid[grid_i];
+			    	}
+			    }
+
+				++perm_serial;
 			}
 
 			// count more extreme values of the test statistics than that observed
@@ -219,6 +273,13 @@ void SequentialTest::run() {
 			}
 #endif
 		}
+
+	    if (tt == CI_MVZ_NN_GRID_BW) {
+	    	delete[] perm_sum_chi_grid;
+	    	delete[] perm_sum_like_grid;
+	    	delete[] perm_max_chi_grid;
+	    	delete[] perm_max_like_grid;
+	    }
 
 #else // => use threads
 
@@ -279,10 +340,6 @@ void SequentialTest::run() {
 		delete scs[t];
 	}
 	delete[] scs;
-
-	if (this->extra_params.y_counts != NULL) {
-		delete[] this->extra_params.y_counts;
-	}
 }
 
 // NOTE: This function runs in the context of a worker thread
@@ -301,11 +358,21 @@ void SequentialTest::compute_permutations(Compute_permutations_thread_arg* carg)
 	// concurrent threads due to the CS cluster's limitations.
 #endif
 
+    double perm_sum_chi, perm_sum_like, perm_max_chi, perm_max_like, perm_ht, perm_edist;
+    double *perm_sum_chi_grid = NULL, *perm_sum_like_grid = NULL, *perm_max_chi_grid = NULL, *perm_max_like_grid = NULL;
+
+    if (tt == CI_MVZ_NN_GRID_BW) {
+    	perm_sum_chi_grid  = new double[extra_params.nnh_grid_cnt];
+    	perm_sum_like_grid = new double[extra_params.nnh_grid_cnt];
+    	perm_max_chi_grid  = new double[extra_params.nnh_grid_cnt];
+    	perm_max_like_grid = new double[extra_params.nnh_grid_cnt];
+    }
+
 	for (int k = 0; k < nr_perm_per_thread; ++k) {
 		scs[t]->permute_and_compute();
 
-	    double perm_sum_chi, perm_sum_like, perm_max_chi, perm_max_like, perm_ht, perm_edist;
 	    scs[t]->get_stats(perm_sum_chi, perm_sum_like, perm_max_chi, perm_max_like, perm_ht, perm_edist);
+		scs[t]->get_grid_stats(perm_sum_chi_grid, perm_sum_like_grid, perm_max_chi_grid, perm_max_like_grid); // safe to call even if not a grid test
 
 		pthread_mutex_lock(&mutex);
 
@@ -316,12 +383,24 @@ void SequentialTest::compute_permutations(Compute_permutations_thread_arg* carg)
 #endif
 
 		if (perm_stats_wanted) {
-			perm_sum_chi_v [perm_counter[0]] = perm_sum_chi;
-			perm_sum_like_v[perm_counter[1]] = perm_sum_like;
-			perm_max_chi_v [perm_counter[2]] = perm_max_chi;
-			perm_max_like_v[perm_counter[3]] = perm_max_like;
-			perm_ht_v      [perm_counter[4]] = perm_ht;
-			perm_edist_v   [perm_counter[5]] = perm_edist;
+			perm_sum_chi_v [perm_serial] = perm_sum_chi;
+			perm_sum_like_v[perm_serial] = perm_sum_like;
+			perm_max_chi_v [perm_serial] = perm_max_chi;
+			perm_max_like_v[perm_serial] = perm_max_like;
+			perm_ht_v      [perm_serial] = perm_ht;
+			perm_edist_v   [perm_serial] = perm_edist;
+
+		    if (tt == CI_MVZ_NN_GRID_BW) {
+		    	int nnh_cnt = extra_params.nnh_grid_cnt;
+		    	for (int grid_i = 0; grid_i < nnh_cnt; ++grid_i) {
+		    		perm_sum_chi_grid_m [perm_serial * nnh_cnt + grid_i] = perm_sum_chi_grid [grid_i];
+		    		perm_sum_like_grid_m[perm_serial * nnh_cnt + grid_i] = perm_sum_like_grid[grid_i];
+		    		perm_max_chi_grid_m [perm_serial * nnh_cnt + grid_i] = perm_max_chi_grid [grid_i];
+		    		perm_max_like_grid_m[perm_serial * nnh_cnt + grid_i] = perm_max_like_grid[grid_i];
+		    	}
+		    }
+
+		    ++perm_serial;
 		}
 
 		// count more extreme values of the test statistics than that observed
@@ -341,36 +420,60 @@ void SequentialTest::compute_permutations(Compute_permutations_thread_arg* carg)
 
 		pthread_mutex_unlock(&mutex);
 	}
+
+    if (tt == CI_MVZ_NN_GRID_BW) {
+    	delete[] perm_sum_chi_grid;
+    	delete[] perm_sum_like_grid;
+    	delete[] perm_max_chi_grid;
+    	delete[] perm_max_like_grid;
+    }
 }
 
 bool SequentialTest::is_null_rejected(void) {
 	return (((double)(pvalc[0])) / nr_perm < beta0); // FIXME allow user to choose statistic
 }
 
-void SequentialTest::get_observed_stats(double& sum_chi, double& sum_like, double& max_chi, double& max_like, double& ht, double& edist) {
-	sum_chi 	= this->obs_sum_chi;
-	sum_like 	= this->obs_sum_like;
-	max_chi 	= this->obs_max_chi;
-	max_like 	= this->obs_max_like;
-	ht 			= this->obs_ht;
-	edist 		= this->obs_edist;
+void SequentialTest::get_observed_stats(double* os) {
+	// FIXME I need to organize this better
+	os[0] = obs_sum_chi;
+	os[1] = obs_sum_like;
+	os[2] = obs_max_chi;
+	os[3] = obs_max_like;
+	os[4] = obs_ht;
+	os[5] = obs_edist;
+
+	if (tt == CI_MVZ_NN_GRID_BW) {
+		int nnh_cnt = extra_params.nnh_grid_cnt;
+		for (int j = 0; j < nnh_cnt; ++j) {
+			os[6 + 4*j] = obs_sum_chi_grid [j];
+			os[7 + 4*j] = obs_sum_like_grid[j];
+			os[8 + 4*j] = obs_max_chi_grid [j];
+			os[9 + 4*j] = obs_max_like_grid[j];
+		}
+	}
 }
 
-void SequentialTest::get_pvalues(double& p_sum_chi, double& p_sum_like, double& p_max_chi, double& p_max_like, double& p_ht, double& p_edist) {
-	if (nr_perm == 0) {
-		p_sum_chi  = 1;
-		p_sum_like = 1;
-		p_max_chi  = 1;
-		p_max_like = 1;
-		p_ht       = 1;
-		p_edist    = 1;
+void SequentialTest::get_pvalues(double* pvs) {
+	int nnh_cnt = extra_params.nnh_grid_cnt;
+
+	if (orig_nr_perm == 0) {
+		for (int i = 0; i < 6; ++i) {
+			pvs[i] = 1;
+		}
+		if (tt == CI_MVZ_NN_GRID_BW) {
+			for (int i = 0; i < nnh_cnt; ++i) {
+				pvs[6 + i] = 1;
+			}
+		}
 	} else {
-		p_sum_chi  = ((double)(pvalc[0])) / nr_perm;
-		p_sum_like = ((double)(pvalc[1])) / nr_perm;
-		p_max_chi  = ((double)(pvalc[2])) / nr_perm;
-		p_max_like = ((double)(pvalc[3])) / nr_perm;
-		p_ht       = ((double)(pvalc[4])) / nr_perm;
-		p_edist    = ((double)(pvalc[5])) / nr_perm;
+		for (int i = 0; i < 6; ++i) {
+			pvs[i] = ((double)(pvalc[i])) / nr_perm;
+		}
+		if (tt == CI_MVZ_NN_GRID_BW) {
+			for (int i = 0; i < nnh_cnt; ++i) {
+				pvs[6 + i] = NAN; // FIXME I'm not tracking these for now, can do it in R
+			}
+		}
 	}
 }
 
@@ -384,6 +487,10 @@ void SequentialTest::get_observed_tables(double* tbls) {
 
 void SequentialTest::get_perm_stats(double* ps) {
 	if (perm_stats_wanted) {
+		// FIXME actually, I should return the number of iterations computed if it
+		// less due to early stop of sequential. (but not critical since there is
+		// probably no point to ask for the perms with sequential mode anyway)
+
 		for (int i = 0; i < orig_nr_perm; ++i) {
 			ps[0 * orig_nr_perm + i] = perm_sum_chi_v [i];
 			ps[1 * orig_nr_perm + i] = perm_sum_like_v[i];
@@ -391,25 +498,17 @@ void SequentialTest::get_perm_stats(double* ps) {
 			ps[3 * orig_nr_perm + i] = perm_max_like_v[i];
 			ps[4 * orig_nr_perm + i] = perm_ht_v      [i];
 			ps[5 * orig_nr_perm + i] = perm_edist_v   [i];
+
+			if (tt == CI_MVZ_NN_GRID_BW) {
+				int nnh_cnt = extra_params.nnh_grid_cnt;
+				for (int j = 0; j < nnh_cnt; ++j) {
+					ps[(6 + 4*j) * orig_nr_perm + i] = perm_sum_chi_grid_m [i * nnh_cnt + j];
+					ps[(7 + 4*j) * orig_nr_perm + i] = perm_sum_like_grid_m[i * nnh_cnt + j];
+					ps[(8 + 4*j) * orig_nr_perm + i] = perm_max_chi_grid_m [i * nnh_cnt + j];
+					ps[(9 + 4*j) * orig_nr_perm + i] = perm_max_like_grid_m[i * nnh_cnt + j];
+				}
+			}
 		}
-	}
-}
-
-void SequentialTest::count_unique_y(void) {
-	int K = 0;
-	for (int i = 0; i < xy_nrow; ++i) {
-		K = max(K, (int)(y[i]));
-	}
-	K = max(2, K + 1);
-	this->extra_params.K = K;
-
-	this->extra_params.y_counts = new int[K];
-	for (int k = 0; k < K; ++k) {
-		this->extra_params.y_counts[k] = 0;
-	}
-
-	for (int i = 0; i < xy_nrow; ++i) {
-		++this->extra_params.y_counts[(int)(y[i])];
 	}
 }
 
@@ -444,6 +543,29 @@ void SequentialTest::sort_y_distances_per_row(void) {
 		}
 
 		sort(sorted_dy[k].begin(), sorted_dy[k].end(), dbl_int_pair_comparator);
+	}
+}
+
+void SequentialTest::sort_z_distances_per_row(void) {
+	// FIXME We don't actually need to sort dz, only for each row i we list
+	// any index j which is in the z-neighborhood of i.
+	// The current implementation is O(n*log(n)) per row. It can also be
+	// done in O(n*K) with K the neighborhood size, but this can be up to O(n^2)
+	// for large K. Is it doable in O(n)?
+
+	sorted_dz.resize(xy_nrow);
+
+	// FIXME this deserves parallelizing. Trivial to do per row.
+
+	for (int k = 0; k < xy_nrow; ++k) {
+		sorted_dz[k].resize(xy_nrow);
+
+		for (int l = 0; l < xy_nrow; ++l) {
+			sorted_dz[k][l].first = dz[l * xy_nrow + k];
+			sorted_dz[k][l].second = l;
+		}
+
+		sort(sorted_dz[k].begin(), sorted_dz[k].end(), dbl_int_pair_comparator);
 	}
 }
 

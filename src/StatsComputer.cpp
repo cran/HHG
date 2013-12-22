@@ -3,6 +3,8 @@
  *
  */
 
+#define _USE_MATH_DEFINES
+
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -13,21 +15,30 @@
 #include <ctime>
 #include <cstring>
 
+#ifdef WIN32
+#include <stddef.h>
+#endif
+
 #include "StatsComputer.h"
 
 using namespace std;
 
 StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, double* dy, double* y,
-		dbl_int_pair_matrix* sorted_dx, dbl_int_pair_matrix* sorted_dy, ExtraParams extra_params)
+		dbl_int_pair_matrix* sorted_dx, dbl_int_pair_matrix* sorted_dy, dbl_int_pair_matrix* sorted_dz,
+		ExtraParams* extra_params)
 {
 	this->tt = tt;
 	this->xy_nrow = xy_nrow;
 	this->y_ncol = y_ncol;
 
+	// I will assume it is safe to use these constructor arguments for the
+	// lifetime of the object without creating a copy
 	this->dx = dx;
 	this->dy = dy;
+	this->z = y; // in the case of some CI tests, y is actually z or dz
 
 	if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST || IS_UDF_TEST(tt)) {
+		// A copy of y is created which will be permuted
 		this->y = new double[xy_nrow * y_ncol];
 		memcpy(this->y, y, sizeof(double) * xy_nrow * y_ncol);
 	} else {
@@ -36,33 +47,68 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 
 	this->sorted_dx = sorted_dx;
 	this->sorted_dy = sorted_dy;
+	this->sorted_dz = sorted_dz;
 
-	w_sum = extra_params.w_sum;
-	w_max = extra_params.w_max;
+	// FIXME now it starts making sense to inherit from extra_params
+	w_sum = extra_params->w_sum;
+	w_max = extra_params->w_max;
+	min_w = min(w_sum, w_max);
 
 	tbls = NULL;
 	store_tables = false;
+	nnh_grid_cnt = 0;
 
 	if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST) {
-		K = extra_params.K;
-		y_counts = extra_params.y_counts;
+		K = extra_params->K;
+		y_counts = extra_params->y_counts;
 	} else if (tt == UDF_DDP_OBS || tt == UDF_DDP_ALL) {
 		x_ordered_by_y = dy;
 		y_ordered_by_x = dy + xy_nrow;
-		K = extra_params.K;
-		correct_bias = extra_params.correct_mi_bias;
-	} else if (tt == CI_NN) {
-		K = extra_params.K;
+		K = extra_params->K;
+		correct_bias = extra_params->correct_mi_bias;
+	} else if (tt == CI_UVZ_NN || tt == CI_MVZ_NN) {
+		nnh = extra_params->nnh;
+		nnh_lsb = extra_params->nnh_lsb;
+	} else if (tt == CI_UVZ_GAUSSIAN || tt == CI_MVZ_GAUSSIAN) {
+		sig = extra_params->sig;
+		nnh_lsb = extra_params->nnh_lsb;
+	} else if (tt == CI_UDF_ADP_MVZ_NN) {
+		K = extra_params->K;
+		correct_bias = extra_params->correct_mi_bias;
+		nnh = extra_params->nnh;
+		nnh_lsb = extra_params->nnh_lsb;
+	} else if (tt == CI_MVZ_NN_GRID_BW) {
+		nnh_grid_cnt = extra_params->nnh_grid_cnt;
+		nnh_grid = extra_params->nnh_grid; // NOTE: not copying, assuming reference will persist
+		nnh_lsb = extra_params->nnh_lsb;
+		sum_chi_grid  = new double[nnh_grid_cnt];
+		sum_like_grid = new double[nnh_grid_cnt];
+		max_chi_grid  = new double[nnh_grid_cnt];
+		max_like_grid = new double[nnh_grid_cnt];
 	}
 
 	// Allocate temporary buffers
-	if (tt == NO_TIES_TEST || tt == GENERAL_TEST || tt == CI_NN) {
+	if (tt == NO_TIES_TEST || tt == GENERAL_TEST || tt == CI_UVZ_GAUSSIAN || tt == CI_MVZ_GAUSSIAN) {
 		idx_1_to_n = new int[xy_nrow];
 		idx_perm = new int[xy_nrow];
 		idx_perm_inv = new int[xy_nrow];
 
 		for (int i = 0; i < xy_nrow; ++i) {
 			idx_perm[i] = idx_perm_inv[i] = idx_1_to_n[i] = i;
+		}
+	} else if (tt == CI_UVZ_NN) {
+		idx_perm = new int[xy_nrow];
+		idx_perm_inv = new int[xy_nrow];
+
+		for (int i = 0; i < xy_nrow; ++i) {
+			idx_perm[i] = idx_perm_inv[i] = i;
+		}
+	} else if (tt == CI_MVZ_NN || tt == CI_UDF_ADP_MVZ_NN || tt == CI_MVZ_NN_GRID_BW) {
+		idx_perm = new int[xy_nrow];
+		idx_perm_inv = new int[xy_nrow];
+
+		for (int i = 0; i < xy_nrow; ++i) {
+			idx_perm[i] = idx_perm_inv[i] = i;
 		}
 	}
 
@@ -79,16 +125,26 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 	}
 
 	if (IS_UDF_TEST(tt)) {
-		pn = xy_nrow + 2;
-		double_integral = new int[pn * pn];
+		if (tt == CI_UDF_ADP_MVZ_NN) {
+			dintegral_pn = nnh + 2;
+			nn_sorted_x.resize(nnh);
+			nn_sorted_y.resize(nnh);
+		} else {
+			dintegral_pn = xy_nrow + 2;
+			dintegral_zero_based_idxs = !(tt == UDF_DDP_OBS || tt == UDF_DDP_ALL);
+		}
+		double_integral = new int[dintegral_pn * dintegral_pn];
 	}
 
-	if (tt == UDF_DDP_ALL) {
-		adp = new double[xy_nrow * xy_nrow];
+	if (tt == UDF_DDP_ALL || tt == CI_UDF_ADP_MVZ_NN) {
+		adp = new double[xy_nrow];
+		adp_l = new double[xy_nrow];
+		adp_r = new double[xy_nrow];
 		precompute_adp();
 	}
 
 	y0_idx = y1_idx = NULL;
+	should_randomize = false;
 
 	switch (tt) {
 		case TWO_SAMPLE_TEST:
@@ -99,25 +155,25 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 
 			stats_func  = &StatsComputer::hhg_two_sample;
 			stats_func2 = &StatsComputer::other_stats_two_sample;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case K_SAMPLE_TEST:
 			stats_func  = &StatsComputer::hhg_k_sample;
 			stats_func2 = &StatsComputer::other_stats_k_sample;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case NO_TIES_TEST:
 			stats_func  = &StatsComputer::hhg_no_ties;
 			stats_func2 = &StatsComputer::other_stats_general;
-			perm_y_func = &StatsComputer::permute_y_multivariate; // actually y can be univariate here too and I could optimize for such a case
+			perm_y_func = &StatsComputer::resample_multivariate; // actually y can be univariate here too and I could optimize for such a case
 		break;
 
 		case GENERAL_TEST:
 			stats_func  = &StatsComputer::hhg_general;
 			stats_func2 = &StatsComputer::other_stats_general;
-			perm_y_func = &StatsComputer::permute_y_multivariate; // actually y can be univariate here too and I could optimize for such a case
+			perm_y_func = &StatsComputer::resample_multivariate; // actually y can be univariate here too and I could optimize for such a case
 
 			sorted_dx_gen.resize(xy_nrow);
 			for (int k = 0; k < xy_nrow; ++k) {
@@ -130,79 +186,109 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 		case UDF_SPR_OBS:
 			stats_func  = &StatsComputer::hhg_udf_spr_obs;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_SPR_ALL:
 			stats_func  = &StatsComputer::hhg_udf_spr_all;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_PPR_22_OBS:
 			stats_func  = &StatsComputer::hhg_udf_ppr_22_obs;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_PPR_22_ALL:
 			stats_func  = &StatsComputer::hhg_udf_ppr_22_all;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_PPR_33_OBS:
 			stats_func  = &StatsComputer::hhg_udf_ppr_33_obs;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_PPR_33_ALL:
 			stats_func  = &StatsComputer::hhg_udf_ppr_33_all;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_TPR_OBS:
 			stats_func  = &StatsComputer::hhg_udf_tpr_obs;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_TPR_ALL:
 			stats_func  = &StatsComputer::hhg_udf_tpr_all;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_SPPR_OBS:
 			stats_func  = &StatsComputer::hhg_udf_sppr_obs;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_SPPR_ALL:
 			stats_func  = &StatsComputer::hhg_udf_sppr_all;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_DDP_OBS:
 			stats_func  = &StatsComputer::hhg_udf_ddp;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		case UDF_DDP_ALL:
 			stats_func  = &StatsComputer::hhg_udf_adp;
 			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
-			perm_y_func = &StatsComputer::permute_y_univariate;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
-		case CI_NN:
-			stats_func  = &StatsComputer::hhg_ci_nn;
+		case CI_UVZ_NN:
+			stats_func  = &StatsComputer::hhg_ci_uvz_nn;
 			stats_func2 = &StatsComputer::other_stats_ci;
-			perm_y_func = &StatsComputer::permute_y_ci;
+			perm_y_func = &StatsComputer::resample_uvz_ci;
+		break;
+
+		case CI_UVZ_GAUSSIAN:
+			stats_func  = &StatsComputer::hhg_ci_uvz_gaussian;
+			stats_func2 = &StatsComputer::other_stats_ci;
+			perm_y_func = &StatsComputer::resample_dummy;
+		break;
+
+		case CI_MVZ_NN:
+			stats_func  = &StatsComputer::hhg_ci_mvz_nn;
+			stats_func2 = &StatsComputer::other_stats_ci;
+			perm_y_func = &StatsComputer::resample_mvz_ci;
+		break;
+
+		case CI_MVZ_GAUSSIAN:
+			stats_func  = &StatsComputer::hhg_ci_mvz_gaussian;
+			stats_func2 = &StatsComputer::other_stats_ci;
+			perm_y_func = &StatsComputer::resample_dummy;
+		break;
+
+		case CI_UDF_ADP_MVZ_NN:
+			stats_func  = &StatsComputer::hhg_ci_udf_adp_mvz_nn;
+			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			perm_y_func = &StatsComputer::resample_mvz_ci;
+		break;
+
+		case CI_MVZ_NN_GRID_BW:
+			stats_func  = &StatsComputer::hhg_ci_mvz_nn_grid;
+			stats_func2 = &StatsComputer::other_stats_ci;
+			perm_y_func = &StatsComputer::resample_mvz_ci;
 		break;
 
 		default:
@@ -217,14 +303,20 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 }
 
 StatsComputer::~StatsComputer() {
-	delete[] y;
+	if (y != NULL) {
+		delete[] y;
+	}
+
 	if (y0_idx != NULL) {
 		delete[] y0_idx;
 		delete[] y1_idx;
 	}
 
-	if (tt == NO_TIES_TEST || tt == GENERAL_TEST || tt == CI_NN) {
+	if (tt == NO_TIES_TEST || tt == GENERAL_TEST || tt == CI_UVZ_GAUSSIAN || tt == CI_MVZ_GAUSSIAN) {
 		delete[] idx_1_to_n;
+		delete[] idx_perm;
+		delete[] idx_perm_inv;
+	} else if (tt == CI_UVZ_NN || tt == CI_MVZ_NN || tt == CI_UDF_ADP_MVZ_NN || tt == CI_MVZ_NN_GRID_BW) {
 		delete[] idx_perm;
 		delete[] idx_perm_inv;
 	}
@@ -245,9 +337,18 @@ StatsComputer::~StatsComputer() {
 		delete[] double_integral;
 	}
   
-  if (tt == UDF_DDP_ALL) {
-    delete[] adp;
-  }
+	if (tt == UDF_DDP_ALL || tt == CI_UDF_ADP_MVZ_NN) {
+		delete[] adp;
+		delete[] adp_l;
+		delete[] adp_r;
+	}
+
+	if (tt == CI_MVZ_NN_GRID_BW) {
+		delete[] sum_chi_grid;
+		delete[] sum_like_grid;
+		delete[] max_chi_grid;
+		delete[] max_like_grid;
+	}
 }
 
 void StatsComputer::compute(void) {
@@ -285,14 +386,24 @@ void StatsComputer::get_stats(double& sum_chi, double& sum_like, double& max_chi
 	edist 		= this->edist;
 }
 
+void StatsComputer::get_grid_stats(double *sum_chi_grid, double *sum_like_grid, double *max_chi_grid, double *max_like_grid) {
+	// NOTE: this has to be safe to call even if not a grid test
+	for (int i = 0; i < nnh_grid_cnt; ++i) {
+		sum_chi_grid [i] = this->sum_chi_grid [i];
+		sum_like_grid[i] = this->sum_like_grid[i];
+		max_chi_grid [i] = this->max_chi_grid [i];
+		max_like_grid[i] = this->max_like_grid[i];
+	}
+}
+
 // Generate a new random permutation of the y vector (Fisher-Yates)
 // FIXME this can probably be optimized and may take a large percent of the CPU time
 // Also, rand() is not really thread safe. On Windows it is kind of ok to use but
 // on Linux this is a particularly bad idea since the state is process-wide.
 
-void StatsComputer::permute_y_univariate(void) {
+void StatsComputer::resample_univariate(void) {
 	for (int i = xy_nrow - 1; i > 0; --i) {
-		int j = rand() % (i + 1);
+		int j = rand() % (i + 1); // should use my_rand() implemented below
 
 		double temp = y[j];
 		y[j] = y[i];
@@ -300,7 +411,7 @@ void StatsComputer::permute_y_univariate(void) {
 	}
 }
 
-void StatsComputer::permute_y_multivariate(void) {
+void StatsComputer::resample_multivariate(void) {
 	// In this case we don't really care about y values, but rather their
 	// per (permuted) row sorted (permuted) indices.
 
@@ -308,14 +419,11 @@ void StatsComputer::permute_y_multivariate(void) {
 	// that we compare against: they do care about the values themselves,
 	// but for now this has no effect)
 
-	memcpy(idx_perm, idx_1_to_n, sizeof(int) * xy_nrow);
+	for (int i = 0; i < xy_nrow; ++i) {
+		int j = rand() % (i + 1); // should use my_rand() implemented below
 
-	for (int i = xy_nrow - 1; i > 0; --i) {
-		int j = rand() % (i + 1);
-
-		int temp = idx_perm[j];
-		idx_perm[j] = idx_perm[i];
-		idx_perm[i] = temp;
+		idx_perm[i] = idx_perm[j];
+		idx_perm[j] = i;
 	}
 
 	for (int i = 0; i < xy_nrow; ++i) {
@@ -323,21 +431,40 @@ void StatsComputer::permute_y_multivariate(void) {
 	}
 }
 
-void StatsComputer::permute_y_ci(void) {
-	// Again we don't actually permute the values, only generate a permutation of the indices
-	int bw = ((K >> 1) << 1);
-	for (int i = 0; i < bw; ++i) {
-		idx_perm[i] = -(i + 1);
-		idx_perm[i + bw] = i + 1;
-	}
+void StatsComputer::resample_uvz_ci(void) {
+	// A smoothed bootstrap. The smoothing is done over the values of z, so for each
+	// sample i we sample uniformly (i.e. currently I am assuming a NN kernel for the
+	// smoothing, and even assuming its width is the same as the HHG statistic's
+	// kernel) from the z-neighborhood of i. We need to generate resampling indices
+	// for x (stored in idx_perm_inv), and independent indices for y (stored in idx_perm).
+	// The current implementation also assumes that the observations have been presorted
+	// according to their z values (which is only meaningful for univariate z).
 
-	for (int i = bw - 1; i > 0; --i) {
-		int j = rand() % (i + 1);
+	// I guess this could be optimized...
 
-		int temp = idx_perm[j];
-		idx_perm[j] = idx_perm[i];
-		idx_perm[i] = temp;
+	int bwh = (nnh_lsb >> 1);
+	for (int i = 0; i < xy_nrow; ++i) {
+		int i1 = max(0, i - bwh);
+		int i2 = min(xy_nrow - 1, i + bwh);
+		idx_perm    [i] = my_rand(i1, i2);
+		idx_perm_inv[i] = my_rand(i1, i2);
 	}
+}
+
+void StatsComputer::resample_mvz_ci(void) {
+	// Same as the univariate version, but has to look in the sorted dz in order to
+	// figure out the indices of neighbors
+
+	for (int i = 0; i < xy_nrow; ++i) {
+		int nn_x = my_rand(0, nnh_lsb - 1);
+		int nn_y = my_rand(0, nnh_lsb - 1);
+		idx_perm_inv[i] = (*sorted_dz)[i][nn_x].second;
+		idx_perm    [i] = (*sorted_dz)[i][nn_y].second;
+	}
+}
+
+void StatsComputer::resample_dummy(void) {
+	should_randomize = true;
 }
 
 void StatsComputer::sort_xy_distances_per_row(void) {
@@ -350,19 +477,16 @@ void StatsComputer::sort_xy_distances_per_row(void) {
 			sorted_dx_gen[k][l].i = l;
 		}
 
-		sort(sorted_dx_gen[k].begin(), sorted_dx_gen[k].end(), dbl_int_pair_comparator_xy);
+		sort(sorted_dx_gen[k].begin(), sorted_dx_gen[k].end(), dbl_dbl_int_pair_comparator_xy);
 	}
 }
 
-// NOTE: Actually now this is exactly the same as the 2-sample implementation (just the y_counts here would be of length K)
 void StatsComputer::hhg_two_sample(void) {
 	int n = xy_nrow;
     int a00, a01, a10, a11;
-    double e00, e01, e10, e11, dnm = (double)(n - 2);
-	double emin00_01, emin10_11, emin, current_chi, current_like;
+    double nrmlz = 1.0 / (n - 2);
     int i, j, k;
     int y_i, total_same_y, total_same_y_count_so_far, curr_dx_same_y_count;
-	double min_w = min(w_sum, w_max);
 
 	sum_chi  = 0;
 	sum_like = 0;
@@ -372,7 +496,7 @@ void StatsComputer::hhg_two_sample(void) {
     for (i = 0; i < n; i++) {
         k = 0;
         y_i = (int)y[i];
-        total_same_y = y_counts[y_i]; // NOTE: this assumes that y itself is an index in [0, K-1]. Otherwise need to implement y_counts as an STL map or something
+        total_same_y = y_counts[y_i]; // NOTE: this assumes that y itself is an index in [0, 1]
         total_same_y_count_so_far = 0;
         curr_dx_same_y_count = 0;
 
@@ -426,42 +550,7 @@ void StatsComputer::hhg_two_sample(void) {
 					}
 #endif
 
-					// FIXME can optimize since we know these sums, we've just derived axx from them
-					e00 = ((a00 + a01) * (a00 + a10)) / dnm;
-					e01 = ((a00 + a01) * (a01 + a11)) / dnm;
-					e10 = ((a10 + a11) * (a00 + a10)) / dnm;
-					e11 = ((a10 + a11) * (a01 + a11)) / dnm;
-
-					emin00_01 = min(e00, e01);
-					emin10_11 = min(e10, e11);
-					emin = min(emin00_01, emin10_11);
-
-					if (emin > min_w) {
-						current_chi = (a00 - e00) * (a00 - e00) / e00
-									+ (a01 - e01) * (a01 - e01) / e01
-									+ (a10 - e10) * (a10 - e10) / e10
-									+ (a11 - e11) * (a11 - e11) / e11;
-					} else {
-						current_chi = 0;
-					}
-
-					if (emin > w_sum) {
-						sum_chi += current_chi * curr_dx_same_y_count;
-					}
-
-					if ((emin > w_max) && (current_chi > max_chi)) {
-						max_chi = current_chi;
-					}
-
-					current_like = ((a00 > 0) ? (a00 * log(a00 / e00)) : 0)
-								 + ((a01 > 0) ? (a01 * log(a01 / e01)) : 0)
-								 + ((a10 > 0) ? (a10 * log(a10 / e10)) : 0)
-								 + ((a11 > 0) ? (a11 * log(a11 / e11)) : 0);
-
-					sum_like += current_like * curr_dx_same_y_count;
-					if (current_like > max_like) {
-						max_like = current_like;
-					}
+					accumulate_2x2_contingency_table(a00, a01, a10, a11, nrmlz, curr_dx_same_y_count);
         		}
 
         		// update/reset the counters in preparation for the next unique dx
@@ -474,14 +563,13 @@ void StatsComputer::hhg_two_sample(void) {
     }
 }
 
+// NOTE: Actually now this is exactly the same as the 2-sample implementation (just the y_counts here would be of length K)
 void StatsComputer::hhg_k_sample(void) {
 	int n = xy_nrow;
     int a00, a01, a10, a11;
-    double e00, e01, e10, e11, dnm = (double)(n - 2);
-	double emin00_01, emin10_11, emin, current_chi, current_like;
+    double nrmlz = 1.0 / (n - 2);
     int i, j, k;
     int y_i, total_same_y, total_same_y_count_so_far, curr_dx_same_y_count;
-	double min_w = min(w_sum, w_max);
 
 	sum_chi  = 0;
 	sum_like = 0;
@@ -513,7 +601,7 @@ void StatsComputer::hhg_k_sample(void) {
 
         k = 0;
         y_i = (int)y[i];
-        total_same_y = y_counts[y_i];
+        total_same_y = y_counts[y_i]; // NOTE: this assumes that y itself is an index in [0, K-1]. Otherwise need to implement y_counts as an STL map or something
         total_same_y_count_so_far = 0;
         curr_dx_same_y_count = 0;
 
@@ -572,42 +660,7 @@ void StatsComputer::hhg_k_sample(void) {
 					}
 #endif
 
-					// FIXME can optimize since we know these sums, we've just derived axx from them
-					e00 = ((a00 + a01) * (a00 + a10)) / dnm;
-					e01 = ((a00 + a01) * (a01 + a11)) / dnm;
-					e10 = ((a10 + a11) * (a00 + a10)) / dnm;
-					e11 = ((a10 + a11) * (a01 + a11)) / dnm;
-
-					emin00_01 = min(e00, e01);
-					emin10_11 = min(e10, e11);
-					emin = min(emin00_01, emin10_11);
-
-					if (emin > min_w) {
-						current_chi = (a00 - e00) * (a00 - e00) / e00
-									+ (a01 - e01) * (a01 - e01) / e01
-									+ (a10 - e10) * (a10 - e10) / e10
-									+ (a11 - e11) * (a11 - e11) / e11;
-					} else {
-						current_chi = 0;
-					}
-
-					if (emin > w_sum) {
-						sum_chi += current_chi * curr_dx_same_y_count;
-					}
-
-					if ((emin > w_max) && (current_chi > max_chi)) {
-						max_chi = current_chi;
-					}
-
-					current_like = ((a00 > 0) ? (a00 * log(a00 / e00)) : 0)
-								 + ((a01 > 0) ? (a01 * log(a01 / e01)) : 0)
-								 + ((a10 > 0) ? (a10 * log(a10 / e10)) : 0)
-								 + ((a11 > 0) ? (a11 * log(a11 / e11)) : 0);
-
-					sum_like += current_like * curr_dx_same_y_count;
-					if (current_like > max_like) {
-						max_like = current_like;
-					}
+					accumulate_2x2_contingency_table(a00, a01, a10, a11, nrmlz, curr_dx_same_y_count);
         		}
 
         		// update/reset the counters in preparation for the next unique dx
@@ -627,9 +680,7 @@ void StatsComputer::hhg_k_sample(void) {
 void StatsComputer::hhg_no_ties(void) {
 	int n = xy_nrow, src;
     int a00, a01, a10, a11;
-    double e00, e01, e10, e11, dnm = (double)(n - 2);
-	double emin00_01, emin10_11, emin, current_chi, current_like;
-	double min_w = min(w_sum, w_max);
+    double nrmlz = 1.0 / (n - 2);
 
 	sum_chi  = 0;
 	max_chi  = 0;
@@ -710,46 +761,11 @@ void StatsComputer::hhg_no_ties(void) {
 #ifdef DEBUG_CHECKS
 			if (!((a00 >= 0) && (a01 >= 0) && (a10 >= 0) && (a11 >= 0) && (a00 + a01 + a10 + a11 == n - 2))) {
 				cout << "THIS IS NOT A VALID CONTINGENCY TABLE !!!" << endl;
-				exit(1);
+				//exit(1);
 			}
 #endif
 
-			// FIXME can optimize since we know these sums, we've just derived axx from them
-			e00 = ((a00 + a01) * (a00 + a10)) / dnm;
-			e01 = ((a00 + a01) * (a01 + a11)) / dnm;
-			e10 = ((a10 + a11) * (a00 + a10)) / dnm;
-			e11 = ((a10 + a11) * (a01 + a11)) / dnm;
-
-			emin00_01 = min(e00, e01);
-			emin10_11 = min(e10, e11);
-			emin = min(emin00_01, emin10_11);
-
-			if (emin > min_w) {
-				current_chi = (a00 - e00) * (a00 - e00) / e00
-							+ (a01 - e01) * (a01 - e01) / e01
-							+ (a10 - e10) * (a10 - e10) / e10
-							+ (a11 - e11) * (a11 - e11) / e11;
-			} else {
-				current_chi = 0;
-			}
-
-			if (emin > w_sum) {
-				sum_chi += current_chi;
-			}
-
-			if ((emin > w_max) && (current_chi > max_chi)) {
-				max_chi = current_chi;
-			}
-
-			current_like = ((a00 > 0) ? (a00 * log(a00 / e00)) : 0)
-						 + ((a01 > 0) ? (a01 * log(a01 / e01)) : 0)
-						 + ((a10 > 0) ? (a10 * log(a10 / e10)) : 0)
-						 + ((a11 > 0) ? (a11 * log(a11 / e11)) : 0);
-
-			sum_like += current_like;
-			if (current_like > max_like) {
-				max_like = current_like;
-			}
+			accumulate_2x2_contingency_table(a00, a01, a10, a11, nrmlz, 1);
 		}
 	}
 }
@@ -757,9 +773,7 @@ void StatsComputer::hhg_no_ties(void) {
 void StatsComputer::hhg_general(void) {
 	int n = xy_nrow, src;
     int a00, a01, a10, a11;
-    double e00, e01, e10, e11, dnm = (double)(n - 2);
-	double emin00_01, emin10_11, emin, current_chi, current_like;
-	double min_w = min(w_sum, w_max);
+    double nrmlz = 1.0 / (n - 2);
 
 	sum_chi  = 0;
 	max_chi  = 0;
@@ -887,46 +901,11 @@ void StatsComputer::hhg_general(void) {
 #ifdef DEBUG_CHECKS
 			if (!((a00 >= 0) && (a01 >= 0) && (a10 >= 0) && (a11 >= 0) && (a00 + a01 + a10 + a11 == n - 2))) {
 				cout << "THIS IS NOT A VALID CONTINGENCY TABLE !!!" << endl;
-				exit(1);
+				//exit(1);
 			}
 #endif
 
-			// FIXME can optimize since we know these sums, we've just derived axx from them
-			e00 = ((a00 + a01) * (a00 + a10)) / dnm;
-			e01 = ((a00 + a01) * (a01 + a11)) / dnm;
-			e10 = ((a10 + a11) * (a00 + a10)) / dnm;
-			e11 = ((a10 + a11) * (a01 + a11)) / dnm;
-
-			emin00_01 = min(e00, e01);
-			emin10_11 = min(e10, e11);
-			emin = min(emin00_01, emin10_11);
-
-			if (emin > min_w) {
-				current_chi = (a00 - e00) * (a00 - e00) / e00
-							+ (a01 - e01) * (a01 - e01) / e01
-							+ (a10 - e10) * (a10 - e10) / e10
-							+ (a11 - e11) * (a11 - e11) / e11;
-			} else {
-				current_chi = 0;
-			}
-
-			if (emin > w_sum) {
-				sum_chi += current_chi;
-			}
-
-			if ((emin > w_max) && (current_chi > max_chi)) {
-				max_chi = current_chi;
-			}
-
-			current_like = ((a00 > 0) ? (a00 * log(a00 / e00)) : 0)
-						 + ((a01 > 0) ? (a01 * log(a01 / e01)) : 0)
-						 + ((a10 > 0) ? (a10 * log(a10 / e10)) : 0)
-						 + ((a11 > 0) ? (a11 * log(a11 / e11)) : 0);
-
-			sum_like += current_like;
-			if (current_like > max_like) {
-				max_like = current_like;
-			}
+			accumulate_2x2_contingency_table(a00, a01, a10, a11, nrmlz, 1);
 		}
 
 #ifdef DEBUG_PRINTS
@@ -935,15 +914,12 @@ void StatsComputer::hhg_general(void) {
 	}
 }
 
-// Conditional independence test using the nearest neighbor kernel
-void StatsComputer::hhg_ci_nn(void) {
+// Conditional independence test using the nearest neighbor kernel (univariate z)
+void StatsComputer::hhg_ci_uvz_nn(void) {
 	int n = xy_nrow;
-    int a00, a01, a10, a11;
-    double e00, e01, e10, e11;
-	double emin00_01, emin10_11, emin, current_chi, current_like;
-	double min_w = min(w_sum, w_max);
-	int nnh = K / 2;
-	double nrmlz = 1 / (nnh * 2 - 1.0);
+	int nnhh = nnh / 2;
+	int nnht = nnhh * 2 - 1;
+	double nrmlz = 1.0 / nnht;
 	int count[2][2];
 
 	sum_chi  = 0;
@@ -951,73 +927,292 @@ void StatsComputer::hhg_ci_nn(void) {
 	sum_like = 0;
 	max_like = 0;
 
-	int dx_ij, dx_ik, dy_ij, dy_ik;
+	double dx_ij, dx_ik, dy_ij, dy_ik;
 
-	for (int i = nnh; i < n - nnh; ++i) { // FIXME what about the edges? completely ignored??
-		// FIXME: can the following be computed faster? if nnh is expected to be a small number
+	for (int i = nnhh; i < n - nnhh; ++i) { // FIXME what about the edges? completely ignored??
+		// FIXME: can the following be computed faster? if nnhh is expected to be a small number
 		// it doesn't seem like a good idea to compute in a fancy way like hhg_general(). Maybe
 		// better to exploit the symmetry in the distance comparison matrices.
 
-		for (int j = i - nnh; j < i + nnh; ++j) {
+		int pi_x = idx_perm_inv[i];
+		int pi_y = idx_perm    [i];
+
+		for (int j = i - nnhh; j <= i + nnhh; ++j) {
+			// A smoothed bootstrap that resamples both x and y
 			if (j != i) {
 				count[0][0] = 0;
 				count[0][1] = 0;
 				count[1][0] = 0;
 				count[1][1] = 0;
 
-				for (int k = i - nnh; k < i + nnh; ++k) {
-					if ((k != j) && (k != i)) {
-						dx_ij = dx[j * n + i];
-						dx_ik = dx[k * n + i];
-						dy_ij = dy[(i + idx_perm[j]) * n + i];
-						dy_ik = dy[(i + idx_perm[k]) * n + i];
+				int pj_x = idx_perm_inv[j];
+				int pj_y = idx_perm    [j];
+
+				dx_ij = dx[pj_x * n + pi_x];
+				dy_ij = dy[pj_y * n + pi_y];
+
+				for (int k = i - nnhh; k <= i + nnhh; ++k) {
+					if ((k != j) && (k != i)) { // FIXME this condition can be avoided by unrolling to three loops
+						int pk_x = idx_perm_inv[k];
+						int pk_y = idx_perm    [k];
+
+						dx_ik = dx[pk_x * n + pi_x];
+						dy_ik = dy[pk_y * n + pi_y];
+
 						++count[dx_ij > dx_ik][dy_ij > dy_ik];
 					}
 				}
-
-				a00 = count[0][0];
-				a01 = count[0][1];
-				a10 = count[1][0];
-				a11 = count[1][1];
-
-				e00 = ((a00 + a01) * (a00 + a10)) * nrmlz;
-				e01 = ((a00 + a01) * (a01 + a11)) * nrmlz;
-				e10 = ((a10 + a11) * (a00 + a10)) * nrmlz;
-				e11 = ((a10 + a11) * (a01 + a11)) * nrmlz;
-
-				emin00_01 = min(e00, e01);
-				emin10_11 = min(e10, e11);
-				emin = min(emin00_01, emin10_11);
-
-				if (emin > min_w) {
-					current_chi = (a00 - e00) * (a00 - e00) / e00
-								+ (a01 - e01) * (a01 - e01) / e01
-								+ (a10 - e10) * (a10 - e10) / e10
-								+ (a11 - e11) * (a11 - e11) / e11;
-				} else {
-					current_chi = 0;
-				}
-
-				if (emin > w_sum) {
-					sum_chi += current_chi;
-				}
-
-				if ((emin > w_max) && (current_chi > max_chi)) {
-					max_chi = current_chi;
-				}
-
-				current_like = ((a00 > 0) ? (a00 * log(a00 / e00)) : 0)
-							 + ((a01 > 0) ? (a01 * log(a01 / e01)) : 0)
-							 + ((a10 > 0) ? (a10 * log(a10 / e10)) : 0)
-							 + ((a11 > 0) ? (a11 * log(a11 / e11)) : 0);
-
-				sum_like += current_like;
-				if (current_like > max_like) {
-					max_like = current_like;
-				}
 			}
+
+			accumulate_2x2_contingency_table(count[0][0], count[0][1], count[1][0], count[1][1], nrmlz, 1);
 		}
 	}
+}
+
+// Conditional independence test using a gaussian kernel (univariate z)
+void StatsComputer::hhg_ci_uvz_gaussian(void) {
+	int n = xy_nrow;
+	double ebw = 3 * sig;
+	double nrmlz = 1 / (2 * M_PI * sig * sig), enrmlz = -0.5 / (sig * sig), wijk;
+	double count[2][2];
+
+	sum_chi  = 0;
+	max_chi  = 0;
+	sum_like = 0;
+	max_like = 0;
+
+	Rprintf("NOTE: THIS IS BROKEN\n");
+
+	double dx_ij, dx_ik, dy_ij, dy_ik;
+	int zli = 0, zhi = 0, ii, knn;
+
+	for (int i = 0; i < n; ++i) {
+		// Can do binary search, but if ebw is not too big that may be useless
+		while ((zli < i) && (z[zli] < z[i] - ebw)) {
+			++zli;
+		}
+		while ((zhi < n - 1) && (z[zhi] < z[i] + ebw)) {
+			++zhi;
+		}
+		if (z[zhi] > z[i] + ebw) {
+			--zhi;
+		}
+		knn = zhi - zli;
+
+		for (ii = 0; ii < i - zli; ++ii) {
+			idx_1_to_n[ii] = idx_perm[ii] = zli + ii;
+		}
+		for (; ii < knn; ++ii) {
+			idx_1_to_n[ii] = idx_perm[ii] = zli + ii + 1;
+		}
+		if (should_randomize) {
+			// FIXME smoothed bootstrap using a separate kernel
+			for (ii = knn - 1; ii > 0; --ii) {
+				int jj = rand() % (ii + 1); // this can be heavily biased since RAND_MAX is 32K and taking the modulo will give higher probability to smaller numbers
+
+				int temp = idx_perm[jj];
+				idx_perm[jj] = idx_perm[ii];
+				idx_perm[ii] = temp;
+			}
+		}
+
+		for (int j = 0; j < knn; ++j) {
+			count[0][0] = 0;
+			count[0][1] = 0;
+			count[1][0] = 0;
+			count[1][1] = 0;
+
+			int jj = idx_1_to_n[j];
+			dx_ij = dx[jj * n + i];
+			dy_ij = dy[idx_perm[j] * n + i];
+
+			for (int k = 0; k < knn; ++k) {
+				if (k != j) {
+					int kk = idx_1_to_n[k];
+					dx_ik = dx[kk * n + i];
+					dy_ik = dy[idx_perm[k] * n + i];
+
+					wijk = nrmlz * exp(enrmlz * ((z[jj] - z[i]) * (z[jj] - z[i]) + (z[kk] - z[i]) * (z[kk] - z[i])));
+					count[dx_ij > dx_ik][dy_ij > dy_ik] += wijk;
+				}
+			}
+
+			accumulate_2x2_contingency_table(count[0][0], count[0][1], count[1][0], count[1][1], nrmlz, 1);
+		}
+	}
+
+	should_randomize = false;
+}
+
+// Conditional independence test using the nearest neighbor kernel (multivariate z)
+void StatsComputer::hhg_ci_mvz_nn(void) {
+	int n = xy_nrow;
+	double nrmlz = 1.0 / (nnh - 1);
+	double dx_ij, dx_ik, dy_ij, dy_ik;
+	double count[2][2];
+
+	sum_chi  = 0;
+	max_chi  = 0;
+	sum_like = 0;
+	max_like = 0;
+
+	// NOTE: here I am using nnh nearest neighbors (not necessarily nnh/2 on each "side")
+	// because it is not clear to me what is an equivalent notion of a "side" high dimension
+
+	for (int i = 0; i < n; ++i) {
+		int pi_x = idx_perm_inv[i];
+		int pi_y = idx_perm    [i];
+
+		for (int j = 1; j <= nnh; ++j) {
+			count[0][0] = 0;
+			count[0][1] = 0;
+			count[1][0] = 0;
+			count[1][1] = 0;
+
+			// We want the j'th z-neighbor of the i'th sample, in the bootstrapped data.
+			int jj = (*sorted_dz)[i][j].second; // the z's are not bootstrapped
+			int pj_x = idx_perm_inv[jj]; // and this gives us the original sample that is the j'th neighbor in the bootstrapped data
+			int pj_y = idx_perm    [jj];
+
+			dx_ij = dx[pj_x * n + pi_x]; // FIXME though this is more readable, working on the transposed matrix may have better locality or reference
+			dy_ij = dy[pj_y * n + pi_y];
+
+			for (int k = 1; k < j; ++k) {
+				int kk = (*sorted_dz)[i][k].second;
+				int pk_x = idx_perm_inv[kk];
+				int pk_y = idx_perm    [kk];
+
+				dx_ik = dx[pk_x * n + pi_x];
+				dy_ik = dy[pk_y * n + pi_y];
+
+				++count[dx_ij > dx_ik][dy_ij > dy_ik];
+			}
+			for (int k = j + 1; k <= nnh; ++k) {
+				int kk = (*sorted_dz)[i][k].second;
+				int pk_x = idx_perm_inv[kk];
+				int pk_y = idx_perm    [kk];
+
+				dx_ik = dx[pk_x * n + pi_x];
+				dy_ik = dy[pk_y * n + pi_y];
+
+				++count[dx_ij > dx_ik][dy_ij > dy_ik];
+			}
+
+			accumulate_2x2_contingency_table(count[0][0], count[0][1], count[1][0], count[1][1], nrmlz, 1);
+		}
+	}
+
+	// FIXME it may be necessary to normalize the sum statistics only by the number of tables
+	// passing the w_sum/w_max conditions
+	sum_chi /= nnh;
+	sum_like /= nnh;
+}
+
+// Conditional independence test using a gaussian kernel (multivariate z)
+void StatsComputer::hhg_ci_mvz_gaussian(void) {
+	int n = xy_nrow;
+	double count[2][2];
+	double dx_ij, dx_ik, dy_ij, dy_ik;
+	int knn;
+
+	// FIXME 1: I need to compensate for the truncation I am doing (probably best to
+	// precompute the normalizing constant in R and send it here as another kernel
+	// parameter)
+
+	// FIXME 2: allow specification of a general Gaussian kernel? (with a general
+	// covariance matrix). I don't see justification for this.
+
+	double ebw = 3 * sig;
+	double nrmlz = 1 / (2 * M_PI * sig * sig), enrmlz = -0.5 / (sig * sig), wijk;
+
+	Rprintf("NOTE: THIS IS BROKEN\n");
+
+	sum_chi  = 0;
+	max_chi  = 0;
+	sum_like = 0;
+	max_like = 0;
+
+	for (int i = 0; i < n; ++i) {
+		// Can do binary search, but if ebw is not too big that may be useless
+		for (knn = 0; (knn < n - 1) && ((*sorted_dz)[i][knn + 1].first < ebw); ++knn) {
+			idx_1_to_n[knn] = idx_perm[knn] = (*sorted_dz)[i][knn + 1].second;
+		}
+
+		if (should_randomize) {
+			// FIXME smoothed bootstrap using a separate kernel
+			for (int ii = knn - 1; ii > 0; --ii) {
+				int jj = rand() % (ii + 1); // should use my_rand() implemented below
+
+				int temp = idx_perm[jj];
+				idx_perm[jj] = idx_perm[ii];
+				idx_perm[ii] = temp;
+			}
+		}
+
+		for (int j = 0; j < knn; ++j) {
+			count[0][0] = 0;
+			count[0][1] = 0;
+			count[1][0] = 0;
+			count[1][1] = 0;
+
+			int jj = idx_1_to_n[j];
+			dx_ij = dx[         jj * n + i];
+			dy_ij = dy[idx_perm[j] * n + i];
+
+			for (int k = 0; k < knn; ++k) {
+				if (k != j) {
+					int kk = idx_1_to_n[k];
+					dx_ik = dx[         kk * n + i];
+					dy_ik = dy[idx_perm[k] * n + i];
+
+					wijk = nrmlz * exp(enrmlz * ((z[jj] - z[i]) * (z[jj] - z[i]) + (z[kk] - z[i]) * (z[kk] - z[i])));
+					count[dx_ij > dx_ik][dy_ij > dy_ik] += wijk;
+				}
+			}
+
+			accumulate_2x2_contingency_table(count[0][0], count[0][1], count[1][0], count[1][1], nrmlz, 1);
+		}
+	}
+
+	should_randomize = false;
+}
+
+// Conditional independence test using the nearest neighbor kernel (multivariate z)
+// In this version we go over a grid of bandwidth values and compute the regular
+// test for each of them. The main set of statistics is then replaced with the
+// maximum statistic across the grid.
+void StatsComputer::hhg_ci_mvz_nn_grid(void) {
+	double max_nnh_sum_chi  = 0;
+	double max_nnh_max_chi  = 0;
+	double max_nnh_sum_like = 0;
+	double max_nnh_max_like = 0;
+
+	for (int i = 0; i < nnh_grid_cnt; ++i) {
+		nnh = nnh_grid[i];
+		hhg_ci_mvz_nn();
+		sum_chi_grid [i] = sum_chi;
+		sum_like_grid[i] = sum_like;
+		max_chi_grid [i] = max_chi;
+		max_like_grid[i] = max_like;
+
+		if (sum_chi > max_nnh_sum_chi) {
+			max_nnh_sum_chi = sum_chi;
+		}
+		if (sum_like > max_nnh_sum_like) {
+			max_nnh_sum_like = sum_like;
+		}
+		if (max_chi > max_nnh_max_chi) {
+			max_nnh_max_chi = max_chi;
+		}
+		if (max_like > max_nnh_max_like) {
+			max_nnh_max_like = max_like;
+		}
+	}
+
+	sum_chi  = max_nnh_sum_chi;
+	max_chi  = max_nnh_max_chi;
+	sum_like = max_nnh_sum_like;
+	max_like = max_nnh_max_like;
 }
 
 // General notes about the univariate distribution-free test (UDF) variants:
@@ -1062,7 +1257,7 @@ void StatsComputer::hhg_ci_nn(void) {
 
 void StatsComputer::hhg_udf_spr_obs(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all points
 	int n = xy_nrow;
@@ -1092,12 +1287,12 @@ void StatsComputer::hhg_udf_spr_obs(void) {
 		}
 #endif
 
-		compute_spr(xi, yi, n, pn, nm1, nm1d);
+		compute_spr_obs(xi, yi, n, dintegral_pn, nm1, nm1d);
 	}
 
 #ifdef UDF_NORMALIZE
-  ng_chi *= n;
-  ng_like *= n;
+	ng_chi *= n;
+	ng_like *= n;
 	sum_chi /= ng_chi;
 	sum_like /= ng_like;
 #endif
@@ -1105,12 +1300,11 @@ void StatsComputer::hhg_udf_spr_obs(void) {
 
 void StatsComputer::hhg_udf_spr_all(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all points
 	int n = xy_nrow;
-	int nm1 = n - 1;
-	double nm1d = n - 1;
+	double nd = n;
 
 	sum_chi  = 0;
 	max_chi  = 0;
@@ -1123,19 +1317,20 @@ void StatsComputer::hhg_udf_spr_all(void) {
 	// TODO: collect individual tables if wanted
 
 #ifndef UDF_ALLOW_DEGENERATE_PARTITIONS
-	for (int xi = 1; xi < nm1; ++xi) {
-		for (int yi = 1; yi < nm1; ++yi) {
+	for (int xi = 1; xi < n; ++xi) {
+		for (int yi = 1; yi < n; ++yi) {
 #else
-	for (int xi = 0; xi < n; ++xi) {
-		for (int yi = 0; yi < n; ++yi) {
+	int np1 = n + 1;
+	for (int xi = 0; xi < np1; ++xi) {
+		for (int yi = 0; yi < np1; ++yi) {
 #endif
-			compute_spr(xi, yi, n, pn, nm1, nm1d);
+			compute_spr_all(xi, yi, n, dintegral_pn, nd);
 		}
 	}
 
 #ifdef UDF_NORMALIZE
-  ng_chi *= n;
-  ng_like *= n;
+	ng_chi *= n;
+	ng_like *= n;
 	sum_chi /= ng_chi;
 	sum_like /= ng_like;
 #endif
@@ -1143,7 +1338,7 @@ void StatsComputer::hhg_udf_spr_all(void) {
 
 void StatsComputer::hhg_udf_ppr_22_obs(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all rectangles
 	int n = xy_nrow;
@@ -1195,13 +1390,13 @@ void StatsComputer::hhg_udf_ppr_22_obs(void) {
 			}
 #endif
 
-			compute_ppr_22(xr_lo, xr_hi, yr_lo, yr_hi, pn, nm2, nm2s);
+			compute_ppr_22(xr_lo, xr_hi, yr_lo, yr_hi, dintegral_pn, nm2, nm2s);
 		}
 	}
 
 #ifdef UDF_NORMALIZE
-  ng_chi *= n;
-  ng_like *= n;
+	ng_chi *= n;
+	ng_like *= n;
 	sum_chi /= ng_chi;
 	sum_like /= ng_like;
 #endif
@@ -1209,7 +1404,7 @@ void StatsComputer::hhg_udf_ppr_22_obs(void) {
 
 void StatsComputer::hhg_udf_ppr_22_all(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all rectangles
 	int n = xy_nrow;
@@ -1241,15 +1436,16 @@ void StatsComputer::hhg_udf_ppr_22_all(void) {
 			for (int yr_lo = 0; yr_lo < nm1; ++yr_lo) {
 				for (int yr_hi = yr_lo + 1; yr_hi < n; ++yr_hi) {
 #endif
-					compute_ppr_22(xr_lo, xr_hi, yr_lo, yr_hi, pn, nm2, nm2s);
+					// FIXME this must be replaced with a special version that works on half ranks, see spr_all
+					compute_ppr_22(xr_lo, xr_hi, yr_lo, yr_hi, dintegral_pn, nm2, nm2s);
 				}
 			}
 		}
 	}
 
 #ifdef UDF_NORMALIZE
-  ng_chi *= n;
-  ng_like *= n;
+	ng_chi *= n;
+	ng_like *= n;
 	sum_chi /= ng_chi;
 	sum_like /= ng_like;
 #endif
@@ -1257,7 +1453,7 @@ void StatsComputer::hhg_udf_ppr_22_all(void) {
 
 void StatsComputer::hhg_udf_ppr_33_obs(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all rectangles
 	int n = xy_nrow;
@@ -1308,13 +1504,13 @@ void StatsComputer::hhg_udf_ppr_33_obs(void) {
 			}
 #endif
 
-			compute_ppr_33(xr_lo, xr_hi, yr_lo, yr_hi, n, pn, nm2);
+			compute_ppr_33(xr_lo, xr_hi, yr_lo, yr_hi, n, dintegral_pn, nm2);
 		}
 	}
 
 #ifdef UDF_NORMALIZE
-  ng_chi *= n;
-  ng_like *= n;
+	ng_chi *= n;
+	ng_like *= n;
 	sum_chi /= ng_chi;
 	sum_like /= ng_like;
 #endif
@@ -1322,7 +1518,7 @@ void StatsComputer::hhg_udf_ppr_33_obs(void) {
 
 void StatsComputer::hhg_udf_ppr_33_all(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all rectangles
 	int n = xy_nrow;
@@ -1353,15 +1549,16 @@ void StatsComputer::hhg_udf_ppr_33_all(void) {
 			for (int yr_lo = 0; yr_lo < nm1; ++yr_lo) {
 				for (int yr_hi = yr_lo + 1; yr_hi < n; ++yr_hi) {
 #endif
-					compute_ppr_33(xr_lo, xr_hi, yr_lo, yr_hi, n, pn, nm2);
+					// FIXME this must be replaced with a special version that works on half ranks, see spr_all
+					compute_ppr_33(xr_lo, xr_hi, yr_lo, yr_hi, n, dintegral_pn, nm2);
 				}
 			}
 		}
 	}
 
 #ifdef UDF_NORMALIZE
-  ng_chi *= n;
-  ng_like *= n;
+	ng_chi *= n;
+	ng_like *= n;
 	sum_chi /= ng_chi;
 	sum_like /= ng_like;
 #endif
@@ -1369,7 +1566,7 @@ void StatsComputer::hhg_udf_ppr_33_all(void) {
 
 void StatsComputer::hhg_udf_tpr_obs(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all rectangles
 	int n = xy_nrow;
@@ -1438,14 +1635,14 @@ void StatsComputer::hhg_udf_tpr_obs(void) {
 				}
 #endif
 
-				compute_tpr(xl, xm, xh, yl, ym, yh, n, pn, nm3);
+				compute_tpr(xl, xm, xh, yl, ym, yh, n, dintegral_pn, nm3);
 			}
 		}
 	}
 
 #ifdef UDF_NORMALIZE
-  ng_chi *= n;
-  ng_like *= n;
+	ng_chi *= n;
+	ng_like *= n;
 	sum_chi /= ng_chi;
 	sum_like /= ng_like;
 #endif
@@ -1453,7 +1650,7 @@ void StatsComputer::hhg_udf_tpr_obs(void) {
 
 void StatsComputer::hhg_udf_tpr_all(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all rectangles
 	int n = xy_nrow;
@@ -1490,7 +1687,8 @@ void StatsComputer::hhg_udf_tpr_all(void) {
 					for (int ym = yl + 1; ym < nm1; ++ym) {
 						for (int yh = ym + 1; yh < n; ++yh) {
 #endif
-							compute_tpr(xl, xm, xh, yl, ym, yh, n, pn, nm3d);
+							// FIXME this must be replaced with a special version that works on half ranks, see spr_all
+							compute_tpr(xl, xm, xh, yl, ym, yh, n, dintegral_pn, nm3d);
 						}
 					}
 				}
@@ -1517,7 +1715,7 @@ void StatsComputer::hhg_udf_sppr_all(void) {
 // This computes DDP ("DDP_OBS")
 void StatsComputer::hhg_udf_ddp(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all rectangles
 	int n = xy_nrow;
@@ -1528,6 +1726,12 @@ void StatsComputer::hhg_udf_ddp(void) {
 	// These can't be computed this way
 	max_chi  = 0;
 	max_like = 0;
+
+	// FIXME: It's not important for now, since DDP is not used with permutations
+	// in this C code (rather, data for null table simulations is permuted in R),
+	// but if I even want to use the permutation feature here I would have to make
+	// sure that not only y (and hence double_integral) is permuted, but also
+	// x_ordered_by_y and y_ordered_by_x, needed in count_ddp_with_given_cell.
 
 	int rect_o;
 	double rect_e, rect_c, rect_l, cnt;
@@ -1590,7 +1794,7 @@ void StatsComputer::hhg_udf_ddp(void) {
 // This computes ADP ("DDP_ALL")
 void StatsComputer::hhg_udf_adp(void) {
 	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral();
+	compute_double_integral(xy_nrow, dx, y);
 
 	// Now compute the score using all rectangles
 	int n = xy_nrow;
@@ -1664,8 +1868,166 @@ void StatsComputer::hhg_udf_adp(void) {
 #endif
 }
 
+// A variant of the ADP statistic used for CI testing
+// NOTE: this is currently NOT a distribution-free test!
+void StatsComputer::hhg_ci_udf_adp_mvz_nn(void) {
+	int n = xy_nrow;
+	int rect_o, xh, yh;
+	double cnt, rect_e, rect_c, rect_l;
+	double edenom = 1.0 / nnh;
+
+	sum_chi  = 0;
+	sum_like = 0;
+	max_chi  = 0; // NOTE:
+	max_like = 0; // these will not be computed (the fast algorithm for ADP does not support max)
+
+	for (int i = 0; i < n; ++i) {
+		// 1. Start by computing the double integral of paired-sample indicators
+		// NOTE: see further notes under compute_double_integral
+		memset(double_integral, 0, sizeof(int) * dintegral_pn * dintegral_pn);
+
+		// 1.1 Compute x- and y-ranks of the neighbors
+		for (int j = 0; j < nnh; ++j) {
+			// We want the j'th z-neighbor of the i'th sample, in the bootstrapped data.
+			int jj = (*sorted_dz)[i][j + 1].second; // the z's are not bootstrapped
+			int pj_x = idx_perm_inv[jj]; // and this gives us the original sample that is the j'th neighbor in the bootstrapped data
+			int pj_y = idx_perm    [jj];
+			nn_sorted_x[j].first = dx[pj_x];
+			nn_sorted_y[j].first = dy[pj_y];
+			nn_sorted_x[j].second = j;
+			nn_sorted_y[j].second = j;
+		}
+		sort(nn_sorted_x.begin(), nn_sorted_x.end(), dbl_int_pair_comparator);
+		sort(nn_sorted_y.begin(), nn_sorted_y.end(), dbl_int_pair_comparator);
+		for (int j = 0; j < nnh; ++j) {
+			nn_sorted_x[nn_sorted_x[j].second].first = j + 1;
+			nn_sorted_y[nn_sorted_y[j].second].first = j + 1;
+		}
+
+		// 1.2. Populate the padded matrix with the indicator variables of whether there
+		// is a point in the neighborhood
+		for (int j = 0; j < nnh; ++j) {
+			int rxj = nn_sorted_x[j].first;
+			int ryj = nn_sorted_y[j].first;
+			double_integral[ryj * dintegral_pn + rxj] = 1;
+		}
+
+		// 1.3. Then run linearly and compute the integral in one row-major pass
+		int la = dintegral_pn;
+		for (int j = 1; j < dintegral_pn; ++j) {
+			int row_running_sum = 0;
+			++la;
+			for (int k = 1; k < dintegral_pn; ++k) {
+				row_running_sum += double_integral[la];
+				double_integral[la] = row_running_sum + double_integral[la - dintegral_pn];
+				++la;
+			}
+		}
+
+		// 2. Now use this to compute the ADP statistic for the neighborhood
+		// NOTE: see further notes under hhg_udf_adp
+		double nn_sum_chi = 0, nn_sum_like = 0;
+		double nr_nonempty_cells = 0;
+		double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+
+		for (int w = 1; w <= nnh; ++w) {
+			for (int h = 1; h <= nnh; ++h) {
+				for (int xl = 1; xl <= nnh - w + 1; ++xl) {
+					for (int yl = 1; yl <= nnh - h + 1; ++yl) {
+						xh = xl + w - 1;
+						yh = yl + h - 1;
+						cnt = count_adp_with_given_cell(xl, xh, yl, yh);
+						if (cnt > 0) {
+							rect_o = count_sample_points_in_rect(xl, xh, yl, yh);
+							rect_e = w * h * edenom;
+							rect_c = ((rect_o - rect_e) * (rect_o - rect_e)) / rect_e * cnt - kahan_c_chi;
+							rect_l = ((rect_o > 0) ? (rect_o * log(rect_o / rect_e)) : 0) * cnt - kahan_c_like;
+
+							kahan_t = nn_sum_chi + rect_c;
+							kahan_c_chi = (kahan_t - nn_sum_chi) - rect_c;
+							nn_sum_chi = kahan_t;
+
+							kahan_t = nn_sum_like + rect_l;
+							kahan_c_like = (kahan_t - nn_sum_like) - rect_l;
+							nn_sum_like = kahan_t;
+
+							if (rect_o > 0) {
+								nr_nonempty_cells += cnt;
+							}
+						}
+					}
+				}
+			}
+		}
+
+#ifdef UDF_NORMALIZE
+		double nr_parts = choose(nnh - 1, K - 1); // this is actually only the sqrt of the nr parts
+		nr_parts *= nr_parts;
+
+		if (correct_bias) {
+			double mm_bias = ((2 * K - 1) * nr_parts - nr_nonempty_cells) / 2; // note this will also be normalized, then it will make sense
+			nn_sum_chi += mm_bias;
+			nn_sum_like += mm_bias;
+		}
+
+		double normalizer = nr_parts * nnh; // gets us to the MI scale
+		nn_sum_chi /= normalizer;
+		nn_sum_like /= normalizer;
+#endif
+
+		sum_chi += nn_sum_chi;
+		sum_like += nn_sum_like;
+	}
+
+#ifdef UDF_NORMALIZE
+	sum_chi /= n;
+	sum_like /= n;
+#endif
+}
+
 // Some other statistics that we compare ourselves against
 // ================================================================================================
+
+void StatsComputer::accumulate_2x2_contingency_table(double a00, double a01, double a10, double a11, double nrmlz, double reps) {
+	double e00, e01, e10, e11, emin00_01, emin10_11, emin, current_chi, current_like;
+
+	e00 = ((a00 + a01) * (a00 + a10)) * nrmlz;
+	e01 = ((a00 + a01) * (a01 + a11)) * nrmlz;
+	e10 = ((a10 + a11) * (a00 + a10)) * nrmlz;
+	e11 = ((a10 + a11) * (a01 + a11)) * nrmlz;
+
+	emin00_01 = min(e00, e01);
+	emin10_11 = min(e10, e11);
+	emin = min(emin00_01, emin10_11);
+
+	if (emin > min_w) {
+		current_chi = (a00 - e00) * (a00 - e00) / e00
+					+ (a01 - e01) * (a01 - e01) / e01
+					+ (a10 - e10) * (a10 - e10) / e10
+					+ (a11 - e11) * (a11 - e11) / e11;
+	} else {
+		current_chi = 0;
+	}
+
+	if (emin > w_sum) {
+		sum_chi += current_chi * reps;
+	}
+
+	if ((emin > w_max) && (current_chi > max_chi)) {
+		max_chi = current_chi;
+	}
+
+	current_like = ((a00 > 0) ? (a00 * log(a00 / e00)) : 0)
+				 + ((a01 > 0) ? (a01 * log(a01 / e01)) : 0)
+				 + ((a10 > 0) ? (a10 * log(a10 / e10)) : 0)
+				 + ((a11 > 0) ? (a11 * log(a11 / e11)) : 0);
+
+	sum_like += current_like * reps;
+
+	if (current_like > max_like) {
+		max_like = current_like;
+	}
+}
 
 void StatsComputer::other_stats_two_sample(void) {
 	// This representation of the data simplifies the computations of edist and HT
@@ -1765,37 +2127,35 @@ void StatsComputer::hhg_gen_merge(int *permutation, int *source, int *inversion_
     }
 }
 
-void StatsComputer::compute_double_integral(void) {
-	memset(double_integral, 0, sizeof(int) * pn * pn);
-
-	int zero_based_idxs = !(tt == UDF_DDP_OBS || tt == UDF_DDP_ALL);
+void StatsComputer::compute_double_integral(int n, double* xx, double* yy) {
+	memset(double_integral, 0, sizeof(int) * dintegral_pn * dintegral_pn);
 
 	// Populate the padded matrix with the indicator variables of whether there
 	// is a point in the set {(x_k, y_k)}_k=1^n in the grid slot (i, j) for i,j in 1,2,...,n
-	for (int i = 0; i < xy_nrow; ++i) {
-		int yi = y[i] + zero_based_idxs;
-		int xi = dx[i] + zero_based_idxs;
-		double_integral[yi * pn + xi] = 1;
+	for (int i = 0; i < n; ++i) {
+		int yi = yy[i] + dintegral_zero_based_idxs;
+		int xi = xx[i] + dintegral_zero_based_idxs;
+		double_integral[yi * dintegral_pn + xi] = 1;
 	}
 
 	// Then run linearly and compute the integral in one row-major pass
-	int la = pn;
-	for (int i = 1; i < pn; ++i) {
+	int la = dintegral_pn;
+	for (int i = 1; i < dintegral_pn; ++i) {
 		int row_running_sum = 0;
 		++la;
-		for (int j = 1; j < pn; ++j) {
+		for (int j = 1; j < dintegral_pn; ++j) {
 			row_running_sum += double_integral[la];
-			double_integral[la] = row_running_sum + double_integral[la - pn];
+			double_integral[la] = row_running_sum + double_integral[la - dintegral_pn];
 			++la;
 		}
 	}
 }
 
 int StatsComputer::count_sample_points_in_rect(int xl, int xh, int yl, int yh) {
-	return (  double_integral[ yh      * pn + xh    ]
-	        - double_integral[ yh      * pn + xl - 1]
-	        - double_integral[(yl - 1) * pn + xh    ]
-	        + double_integral[(yl - 1) * pn + xl - 1]);
+	return (  double_integral[ yh      * dintegral_pn + xh    ]
+	        - double_integral[ yh      * dintegral_pn + xl - 1]
+	        - double_integral[(yl - 1) * dintegral_pn + xh    ]
+	        + double_integral[(yl - 1) * dintegral_pn + xl - 1]);
 }
 
 // This counts the number of data driven partitions of the data, that contain the given rectangle as a cell.
@@ -1984,9 +2344,35 @@ double StatsComputer::count_ddp_with_given_cell(int xl, int xh, int yl, int yh) 
 
 // This counts the number of unrestricted partitions of the data.
 double StatsComputer::count_adp_with_given_cell(int xl, int xh, int yl, int yh) {
+#if 0
 	// FIXME this is quite silly, and I can probably speed this up considerably
 	// by blocking in a way that takes cache hierarchy into account.
 	return (adp[(xl - 1) * xy_nrow + xh - 1] * adp[(yl - 1) * xy_nrow + yh - 1]);
+#else
+	double cx, cy;
+
+	if (xl == 1) {
+		// left anchored interval
+		cx = adp_l[xh - 1];
+	} else if (xh == xy_nrow) {
+		// right anchored interval
+		cx = adp_r[xl - 1];
+	} else {
+		cx = adp[xh - xl];
+	}
+
+	if (yl == 1) {
+		// left anchored interval
+		cy = adp_l[yh - 1];
+	} else if (yh == xy_nrow) {
+		// right anchored interval
+		cy = adp_r[yl - 1];
+	} else {
+		cy = adp[yh - yl];
+	}
+
+	return (cx * cy);
+#endif
 }
 
 void StatsComputer::precompute_adp(void) {
@@ -2016,22 +2402,20 @@ void StatsComputer::precompute_adp(void) {
 			}
 		}
 	}
-#else // partition between ranks
-	for (int xl = 1; xl <= n; ++xl) {
-		for (int xh = xl; xh <= n; ++xh) {
-			int idx = (xl - 1) * xy_nrow + xh - 1;
+#else
+	// left anchored interval (xl == 1)
+	for (int xh = 1; xh <= n; ++xh) {
+		adp_l[xh - 1] = my_choose(n - xh - 1, K - 2); // (the xh == n case is irrelevant)
+	}
 
-			if (xl == 1) {
-				// left anchored interval
-				adp[idx] = my_choose(n - xh - 1, K - 2);
-			} else if (xh == n) {
-				// right anchored interval
-				adp[idx] = my_choose(xl - 2, K - 2);
-			} else {
-				// nondegenerate regular interval
-				adp[idx] = my_choose(n - (xh - xl) - 3, K - 3);
-			}
-		}
+	// right anchored interval (xh == n)
+	for (int xl = 1; xl <= n; ++xl) {
+		adp_r[xl - 1] = my_choose(xl - 2, K - 2); // (the xl == 1 case is irrelevant)
+	}
+
+	// nondegenerate regular interval
+	for (int xd = 0; xd < n; ++xd) {
+		adp[xd] = my_choose(n - xd - 3, K - 3); // (the xd > n - 3 case is irrelevant)
 	}
 #endif
 }
@@ -2118,9 +2502,10 @@ void StatsComputer::compute_edist(void) {
 	edist *= ((double)(n0 * n1)) / (n0 + n1);
 }
 
-void StatsComputer::compute_spr(int xi, int yi, int n, int pn, int nm1, double nm1d) {
+void StatsComputer::compute_spr_obs(int xi, int yi, int n, int pn, int nm1, double nm1d) {
 	int a11, a12, a21, a22;
 	double e11, e12, e21, e22, current_chi, current_like;
+	double emin11_12, emin21_22, emin;
 
 	a11 = double_integral[n  * pn + xi] - double_integral[(yi + 1) * pn + xi    ];
 	a12 = double_integral[n  * pn + n ] - double_integral[ n       * pn + xi + 1] - double_integral[(yi + 1) * pn + n] + double_integral[(yi + 1) * pn + xi + 1];
@@ -2132,22 +2517,88 @@ void StatsComputer::compute_spr(int xi, int yi, int n, int pn, int nm1, double n
 	e21 =        xi  *        yi  / nm1d;
 	e22 = (nm1 - xi) *        yi  / nm1d;
 
+	emin11_12 = min(e11, e12);
+	emin21_22 = min(e21, e22);
+	emin = min(emin11_12, emin21_22);
+
+	if (emin > min_w) {
 #ifdef UDF_ALLOW_DEGENERATE_PARTITIONS
-	current_chi = ((e11 > 0) ? ((a11 - e11) * (a11 - e11) / e11) : 0)
-				+ ((e21 > 0) ? ((a21 - e21) * (a21 - e21) / e21) : 0)
-				+ ((e12 > 0) ? ((a12 - e12) * (a12 - e12) / e12) : 0)
-				+ ((e22 > 0) ? ((a22 - e22) * (a22 - e22) / e22) : 0);
+		current_chi = ((e11 > 0) ? ((a11 - e11) * (a11 - e11) / e11) : 0)
+					+ ((e21 > 0) ? ((a21 - e21) * (a21 - e21) / e21) : 0)
+					+ ((e12 > 0) ? ((a12 - e12) * (a12 - e12) / e12) : 0)
+					+ ((e22 > 0) ? ((a22 - e22) * (a22 - e22) / e22) : 0);
 #else
-	current_chi = (a11 - e11) * (a11 - e11) / e11
-				+ (a21 - e21) * (a21 - e21) / e21
-				+ (a12 - e12) * (a12 - e12) / e12
-				+ (a22 - e22) * (a22 - e22) / e22;
+		current_chi = (a11 - e11) * (a11 - e11) / e11
+					+ (a21 - e21) * (a21 - e21) / e21
+					+ (a12 - e12) * (a12 - e12) / e12
+					+ (a22 - e22) * (a22 - e22) / e22;
 #endif
+	} else {
+		current_chi = 0;
+	}
 
-	sum_chi += current_chi;
-	++ng_chi;
+	if (emin > w_sum) {
+		sum_chi += current_chi;
+		++ng_chi;
+	}
 
-    if (current_chi > max_chi) {
+	if ((emin > w_max) && (current_chi > max_chi)) {
+		max_chi = current_chi;
+	}
+
+	current_like = ((a11 > 0) ? (a11 * log(a11 / e11)) : 0)
+	             + ((a21 > 0) ? (a21 * log(a21 / e21)) : 0)
+	             + ((a12 > 0) ? (a12 * log(a12 / e12)) : 0)
+	             + ((a22 > 0) ? (a22 * log(a22 / e22)) : 0);
+
+	sum_like += current_like;
+	++ng_like;
+	if (current_like > max_like) {
+		max_like = current_like;
+	}
+}
+
+void StatsComputer::compute_spr_all(int xi, int yi, int n, int pn, double nd) {
+	int a11, a12, a21, a22;
+	double e11, e12, e21, e22, current_chi, current_like;
+	double emin11_12, emin21_22, emin;
+
+	a11 = double_integral[n  * pn + xi] - double_integral[yi * pn + xi];
+	a12 = double_integral[n  * pn + n ] - double_integral[ n * pn + xi] - double_integral[yi * pn + n] + double_integral[yi * pn + xi];
+	a21 = double_integral[yi * pn + xi];
+	a22 = double_integral[yi * pn + n ] - double_integral[yi * pn + xi];
+
+	e11 =      xi  * (n - yi) / nd;
+	e12 = (n - xi) * (n - yi) / nd;
+	e21 =      xi  *      yi  / nd;
+	e22 = (n - xi) *      yi  / nd;
+
+	emin11_12 = min(e11, e12);
+	emin21_22 = min(e21, e22);
+	emin = min(emin11_12, emin21_22);
+
+	if (emin > min_w) {
+#ifdef UDF_ALLOW_DEGENERATE_PARTITIONS
+		current_chi = ((e11 > 0) ? ((a11 - e11) * (a11 - e11) / e11) : 0)
+					+ ((e21 > 0) ? ((a21 - e21) * (a21 - e21) / e21) : 0)
+					+ ((e12 > 0) ? ((a12 - e12) * (a12 - e12) / e12) : 0)
+					+ ((e22 > 0) ? ((a22 - e22) * (a22 - e22) / e22) : 0);
+#else
+		current_chi = (a11 - e11) * (a11 - e11) / e11
+					+ (a21 - e21) * (a21 - e21) / e21
+					+ (a12 - e12) * (a12 - e12) / e12
+					+ (a22 - e22) * (a22 - e22) / e22;
+#endif
+	} else {
+		current_chi = 0;
+	}
+
+	if (emin > w_sum) {
+		sum_chi += current_chi;
+		++ng_chi;
+	}
+
+	if ((emin > w_max) && (current_chi > max_chi)) {
 		max_chi = current_chi;
 	}
 
@@ -2166,6 +2617,7 @@ void StatsComputer::compute_spr(int xi, int yi, int n, int pn, int nm1, double n
 void StatsComputer::compute_ppr_22(int xr_lo, int xr_hi, int yr_lo, int yr_hi, int pn, int nm2, double nm2s) {
 	int pij_num, Aij, Bij;
 	double pij, qij, current_chi, current_like;
+	double emin;
 
     // in the notation of the grant document:
     pij_num = (yr_hi - yr_lo - 1) * (xr_hi - xr_lo - 1);
@@ -2177,15 +2629,24 @@ void StatsComputer::compute_ppr_22(int xr_lo, int xr_hi, int yr_lo, int yr_hi, i
     pij = pij_num / nm2s;
     qij = 1 - pij;
 
-#ifndef UDF_ALLOW_DEGENERATE_PARTITIONS
-    current_chi = ((Aij - nm2 * pij) * (Aij - nm2 * pij) / (nm2 * pij * (1 - pij)));
-#else
-    current_chi = (pij * (1 - pij) > 0) ? ((Aij - nm2 * pij) * (Aij - nm2 * pij) / (nm2 * pij * (1 - pij))) : 0;
-#endif
+	emin = min(pij, qij) * nm2s;
 
-	sum_chi += current_chi;
-	++ng_chi;
-    if (current_chi > max_chi) {
+	if (emin > min_w) {
+#ifndef UDF_ALLOW_DEGENERATE_PARTITIONS
+		current_chi = ((Aij - nm2 * pij) * (Aij - nm2 * pij) / (nm2 * pij * (1 - pij)));
+#else
+		current_chi = (pij * (1 - pij) > 0) ? ((Aij - nm2 * pij) * (Aij - nm2 * pij) / (nm2 * pij * (1 - pij))) : 0;
+#endif
+	} else {
+		current_chi = 0;
+	}
+
+	if (emin > w_sum) {
+		sum_chi += current_chi;
+		++ng_chi;
+	}
+
+	if ((emin > w_max) && (current_chi > max_chi)) {
 		max_chi = current_chi;
 	}
 
@@ -2202,6 +2663,7 @@ void StatsComputer::compute_ppr_22(int xr_lo, int xr_hi, int yr_lo, int yr_hi, i
 void StatsComputer::compute_ppr_33(int xr_lo, int xr_hi, int yr_lo, int yr_hi, int n, int pn, double nm2) {
 	int a11, a21, a31, a12, a22, a32, a13, a23, a33;
 	double e11, e21, e31, e12, e22, e32, e13, e23, e33, current_chi, current_like;
+	double emin1, emin2, emin3, emin4, emin;
 
 	a11 = double_integral[(n    ) * pn + xr_lo] - double_integral[(yr_hi + 1) * pn + xr_lo    ];
 	a21 = double_integral[(yr_hi) * pn + xr_lo] - double_integral[(yr_lo + 1) * pn + xr_lo    ];
@@ -2244,31 +2706,47 @@ void StatsComputer::compute_ppr_33(int xr_lo, int xr_hi, int yr_lo, int yr_hi, i
 	e33 = (n     - 1 - xr_hi) * (yr_lo            ) / nm2;
 #endif
 
-#ifndef UDF_ALLOW_DEGENERATE_PARTITIONS
-	current_chi = (a11 - e11) * (a11 - e11) / e11
-				+ (a21 - e21) * (a21 - e21) / e21
-				+ (a31 - e31) * (a31 - e31) / e31
-				+ (a12 - e12) * (a12 - e12) / e12
-				+ (a22 - e22) * (a22 - e22) / e22
-				+ (a32 - e32) * (a32 - e32) / e32
-				+ (a13 - e13) * (a13 - e13) / e13
-				+ (a23 - e23) * (a23 - e23) / e23
-				+ (a33 - e33) * (a33 - e33) / e33;
-#else
-	current_chi = ((e11 > 0) ? ((a11 - e11) * (a11 - e11) / e11) : 0)
-				+ ((e21 > 0) ? ((a21 - e21) * (a21 - e21) / e21) : 0)
-				+ ((e31 > 0) ? ((a31 - e31) * (a31 - e31) / e31) : 0)
-				+ ((e12 > 0) ? ((a12 - e12) * (a12 - e12) / e12) : 0)
-				+ ((e22 > 0) ? ((a22 - e22) * (a22 - e22) / e22) : 0)
-				+ ((e32 > 0) ? ((a32 - e32) * (a32 - e32) / e32) : 0)
-				+ ((e13 > 0) ? ((a13 - e13) * (a13 - e13) / e13) : 0)
-				+ ((e23 > 0) ? ((a23 - e23) * (a23 - e23) / e23) : 0)
-				+ ((e33 > 0) ? ((a33 - e33) * (a33 - e33) / e33) : 0);
-#endif
+	emin1 = min(e11, e21);
+	emin2 = min(e31, e12);
+	emin3 = min(e22, e32);
+	emin4 = min(e13, e23);
+	emin1 = min(emin1, emin2);
+	emin2 = min(emin3, emin4);
+	emin1 = min(emin1, emin2);
+	emin = min(emin1, e33);
 
-	sum_chi += current_chi;
-	++ng_chi;
-	if (current_chi > max_chi) {
+	if (emin > min_w) {
+#ifndef UDF_ALLOW_DEGENERATE_PARTITIONS
+		current_chi = (a11 - e11) * (a11 - e11) / e11
+					+ (a21 - e21) * (a21 - e21) / e21
+					+ (a31 - e31) * (a31 - e31) / e31
+					+ (a12 - e12) * (a12 - e12) / e12
+					+ (a22 - e22) * (a22 - e22) / e22
+					+ (a32 - e32) * (a32 - e32) / e32
+					+ (a13 - e13) * (a13 - e13) / e13
+					+ (a23 - e23) * (a23 - e23) / e23
+					+ (a33 - e33) * (a33 - e33) / e33;
+#else
+		current_chi = ((e11 > 0) ? ((a11 - e11) * (a11 - e11) / e11) : 0)
+					+ ((e21 > 0) ? ((a21 - e21) * (a21 - e21) / e21) : 0)
+					+ ((e31 > 0) ? ((a31 - e31) * (a31 - e31) / e31) : 0)
+					+ ((e12 > 0) ? ((a12 - e12) * (a12 - e12) / e12) : 0)
+					+ ((e22 > 0) ? ((a22 - e22) * (a22 - e22) / e22) : 0)
+					+ ((e32 > 0) ? ((a32 - e32) * (a32 - e32) / e32) : 0)
+					+ ((e13 > 0) ? ((a13 - e13) * (a13 - e13) / e13) : 0)
+					+ ((e23 > 0) ? ((a23 - e23) * (a23 - e23) / e23) : 0)
+					+ ((e33 > 0) ? ((a33 - e33) * (a33 - e33) / e33) : 0);
+#endif
+	} else {
+		current_chi = 0;
+	}
+
+	if (emin > w_sum) {
+		sum_chi += current_chi;
+		++ng_chi;
+	}
+
+	if ((emin > w_max) && (current_chi > max_chi)) {
 		max_chi = current_chi;
 	}
 
@@ -2293,6 +2771,7 @@ void StatsComputer::compute_tpr(int xl, int xm, int xh, int yl, int ym, int yh, 
 	int a11, a12, a13, a14, a21, a22, a23, a24, a31, a32, a33, a34, a41, a42, a43, a44;
 	double e11, e12, e13, e14, e21, e22, e23, e24, e31, e32, e33, e34, e41, e42, e43, e44;
 	double current_chi, current_like;
+	double emin1, emin2, emin3, emin4, emin5, emin6, emin7, emin8, emin;
 
     a11 = double_integral[(n ) * pn + xl] - double_integral[(yh + 1) * pn + xl    ];
     a21 = double_integral[(yh) * pn + xl] - double_integral[(ym + 1) * pn + xl    ];
@@ -2361,45 +2840,68 @@ void StatsComputer::compute_tpr(int xl, int xm, int xh, int yl, int ym, int yh, 
 	e44 = (n  - 1 - xh) * (yl         ) / nm3;
 #endif
 
-#ifndef UDF_ALLOW_DEGENERATE_PARTITIONS
-	current_chi = (a11 - e11) * (a11 - e11) / e11
-				+ (a21 - e21) * (a21 - e21) / e21
-				+ (a31 - e31) * (a31 - e31) / e31
-				+ (a41 - e41) * (a41 - e41) / e41
-				+ (a12 - e12) * (a12 - e12) / e12
-				+ (a22 - e22) * (a22 - e22) / e22
-				+ (a32 - e32) * (a32 - e32) / e32
-				+ (a42 - e42) * (a42 - e42) / e42
-				+ (a13 - e13) * (a13 - e13) / e13
-				+ (a23 - e23) * (a23 - e23) / e23
-				+ (a33 - e33) * (a33 - e33) / e33
-				+ (a43 - e43) * (a43 - e43) / e43
-				+ (a14 - e14) * (a14 - e14) / e14
-				+ (a24 - e24) * (a24 - e24) / e24
-				+ (a34 - e34) * (a34 - e34) / e34
-				+ (a44 - e44) * (a44 - e44) / e44;
-#else
-	current_chi = ((e11 > 0) ? ((a11 - e11) * (a11 - e11) / e11) : 0)
-				+ ((e21 > 0) ? ((a21 - e21) * (a21 - e21) / e21) : 0)
-				+ ((e31 > 0) ? ((a31 - e31) * (a31 - e31) / e31) : 0)
-				+ ((e41 > 0) ? ((a41 - e41) * (a41 - e41) / e41) : 0)
-				+ ((e12 > 0) ? ((a12 - e12) * (a12 - e12) / e12) : 0)
-				+ ((e22 > 0) ? ((a22 - e22) * (a22 - e22) / e22) : 0)
-				+ ((e32 > 0) ? ((a32 - e32) * (a32 - e32) / e32) : 0)
-				+ ((e42 > 0) ? ((a42 - e42) * (a42 - e42) / e42) : 0)
-				+ ((e13 > 0) ? ((a13 - e13) * (a13 - e13) / e13) : 0)
-				+ ((e23 > 0) ? ((a23 - e23) * (a23 - e23) / e23) : 0)
-				+ ((e33 > 0) ? ((a33 - e33) * (a33 - e33) / e33) : 0)
-				+ ((e43 > 0) ? ((a43 - e43) * (a43 - e43) / e43) : 0)
-				+ ((e14 > 0) ? ((a14 - e14) * (a14 - e14) / e14) : 0)
-				+ ((e24 > 0) ? ((a24 - e24) * (a24 - e24) / e24) : 0)
-				+ ((e34 > 0) ? ((a34 - e34) * (a34 - e34) / e34) : 0)
-				+ ((e44 > 0) ? ((a44 - e44) * (a44 - e44) / e44) : 0);
-#endif
+	emin1 = min(e11, e21);
+	emin2 = min(e31, e41);
+	emin3 = min(e12, e22);
+	emin4 = min(e32, e42);
+	emin5 = min(e13, e23);
+	emin6 = min(e33, e43);
+	emin7 = min(e14, e24);
+	emin8 = min(e34, e44);
+	emin1 = min(emin1, emin2);
+	emin2 = min(emin3, emin4);
+	emin3 = min(emin5, emin6);
+	emin4 = min(emin7, emin8);
+	emin1 = min(emin1, emin2);
+	emin2 = min(emin3, emin4);
+	emin = min(emin1, emin2);
 
-	sum_chi += current_chi;
-	++ng_chi;
-	if (current_chi > max_chi) {
+	if (emin > min_w) {
+#ifndef UDF_ALLOW_DEGENERATE_PARTITIONS
+		current_chi = (a11 - e11) * (a11 - e11) / e11
+					+ (a21 - e21) * (a21 - e21) / e21
+					+ (a31 - e31) * (a31 - e31) / e31
+					+ (a41 - e41) * (a41 - e41) / e41
+					+ (a12 - e12) * (a12 - e12) / e12
+					+ (a22 - e22) * (a22 - e22) / e22
+					+ (a32 - e32) * (a32 - e32) / e32
+					+ (a42 - e42) * (a42 - e42) / e42
+					+ (a13 - e13) * (a13 - e13) / e13
+					+ (a23 - e23) * (a23 - e23) / e23
+					+ (a33 - e33) * (a33 - e33) / e33
+					+ (a43 - e43) * (a43 - e43) / e43
+					+ (a14 - e14) * (a14 - e14) / e14
+					+ (a24 - e24) * (a24 - e24) / e24
+					+ (a34 - e34) * (a34 - e34) / e34
+					+ (a44 - e44) * (a44 - e44) / e44;
+#else
+		current_chi = ((e11 > 0) ? ((a11 - e11) * (a11 - e11) / e11) : 0)
+					+ ((e21 > 0) ? ((a21 - e21) * (a21 - e21) / e21) : 0)
+					+ ((e31 > 0) ? ((a31 - e31) * (a31 - e31) / e31) : 0)
+					+ ((e41 > 0) ? ((a41 - e41) * (a41 - e41) / e41) : 0)
+					+ ((e12 > 0) ? ((a12 - e12) * (a12 - e12) / e12) : 0)
+					+ ((e22 > 0) ? ((a22 - e22) * (a22 - e22) / e22) : 0)
+					+ ((e32 > 0) ? ((a32 - e32) * (a32 - e32) / e32) : 0)
+					+ ((e42 > 0) ? ((a42 - e42) * (a42 - e42) / e42) : 0)
+					+ ((e13 > 0) ? ((a13 - e13) * (a13 - e13) / e13) : 0)
+					+ ((e23 > 0) ? ((a23 - e23) * (a23 - e23) / e23) : 0)
+					+ ((e33 > 0) ? ((a33 - e33) * (a33 - e33) / e33) : 0)
+					+ ((e43 > 0) ? ((a43 - e43) * (a43 - e43) / e43) : 0)
+					+ ((e14 > 0) ? ((a14 - e14) * (a14 - e14) / e14) : 0)
+					+ ((e24 > 0) ? ((a24 - e24) * (a24 - e24) / e24) : 0)
+					+ ((e34 > 0) ? ((a34 - e34) * (a34 - e34) / e34) : 0)
+					+ ((e44 > 0) ? ((a44 - e44) * (a44 - e44) / e44) : 0);
+#endif
+	} else {
+		current_chi = 0;
+	}
+
+	if (emin > w_sum) {
+		sum_chi += current_chi;
+		++ng_chi;
+	}
+
+	if ((emin > w_max) && (current_chi > max_chi)) {
 		max_chi = current_chi;
 	}
 
@@ -2425,4 +2927,25 @@ void StatsComputer::compute_tpr(int xl, int xm, int xh, int yl, int ym, int yh, 
 	if (current_like > max_like) {
 		max_like = current_like;
 	}
+}
+
+inline int StatsComputer::my_rand(int lo, int hi) {
+	// return a random number between lo and hi inclusive.
+
+#if 0
+	// perhaps more accurate, but slow and undeterministic.
+	// rand() is not a high quality PRNG anyway
+
+    int divisor = RAND_MAX / (hi + 1);
+    int retval;
+
+    do {
+        retval = rand() / divisor;
+    } while (retval > hi);
+
+    return (retval + lo);
+#else
+    // slightly skewed but faster
+    return (rand() % (hi - lo + 1) + lo);
+#endif
 }

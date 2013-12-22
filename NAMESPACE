@@ -1,3 +1,4 @@
 exportPattern("^hhg.+")
 exportPattern("^xdp.+")
+exportPattern("^datagen+")
 useDynLib(HHG, HHG)

@@ -24,7 +24,6 @@
 #include <Rinternals.h>
 #endif
 
-// Please note: some test variants are still work in progress; only tests with exposed R interface are working and usable.
 typedef enum {
 	TWO_SAMPLE_TEST 		= 0,
 	K_SAMPLE_TEST 			= 1,
@@ -42,13 +41,22 @@ typedef enum {
 	UDF_SPPR_ALL     		= 13,
 	UDF_DDP_OBS     		= 14,
 	UDF_DDP_ALL     		= 15,
-	CI_NN     				= 16
+	CI_UVZ_NN  				= 16,
+	CI_UVZ_GAUSSIAN			= 17,
+	CI_MVZ_NN  				= 18,
+	CI_MVZ_GAUSSIAN			= 19,
+	CI_UDF_ADP_MVZ_NN		= 20,
+	CI_MVZ_NN_GRID_BW		= 21
 } TestType;
 
 #define IS_UDF_TEST(tt) ((tt) == UDF_SPR_OBS    || (tt) == UDF_SPR_ALL    || (tt) == UDF_PPR_22_OBS || \
 		                 (tt) == UDF_PPR_22_ALL || (tt) == UDF_PPR_33_OBS || (tt) == UDF_PPR_33_ALL || \
 		                 (tt) == UDF_TPR_OBS    || (tt) == UDF_TPR_ALL    || (tt) == UDF_SPPR_OBS   || \
-		                 (tt) == UDF_SPPR_ALL   || (tt) == UDF_DDP_OBS    || (tt) == UDF_DDP_ALL)
+		                 (tt) == UDF_SPPR_ALL   || (tt) == UDF_DDP_OBS    || (tt) == UDF_DDP_ALL    || \
+		                 (tt) == CI_UDF_ADP_MVZ_NN)
+
+#define IS_CI_MVZ_TEST(tt) ((tt) == CI_MVZ_NN         || (tt) == CI_MVZ_GAUSSIAN || \
+		                    (tt) == CI_UDF_ADP_MVZ_NN || (tt) == CI_MVZ_NN_GRID_BW)
 
 //#define UDF_ALLOW_DEGENERATE_PARTITIONS
 #define UDF_NORMALIZE
@@ -61,9 +69,27 @@ typedef std::vector< std::vector<dbl_int_pair> > dbl_int_pair_matrix;
 struct ExtraParams {
 	double w_sum;
 	double w_max;
-	int K; // number of unique y values, also used for NN kernel width, and for order of ADP/DDP partitions
+	int K; // number of unique y values, also used for HHGCI NN kernel width, and for order of ADP/DDP partitions
 	int* y_counts; // counts observed for each unique y value, sorted by y value
 	bool correct_mi_bias;
+	double sig;
+	int nnh; // NN kernel width used for our statistic in the CI test
+	int nnh_lsb; // NN kernel width used for locally smoothed bootstrap (for computing p-values in the CI test)
+	int nnh_grid_cnt;
+	int* nnh_grid;
+
+	ExtraParams() {
+		w_sum = 0;
+		w_max = 0;
+		K = 0;
+		y_counts = NULL;
+		correct_mi_bias = false;
+		sig = 0;
+		nnh = 0;
+		nnh_lsb = 0;
+		nnh_grid_cnt = 0;
+		nnh_grid = NULL;
+	}
 };
 
 #endif /* HHG_H_ */

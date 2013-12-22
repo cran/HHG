@@ -6,27 +6,29 @@
 \description{This function computes test statistics for the tests of independence between two random variables (\code{X} and \code{Y}) presented in Kaufman et al. (2013). Several specialized variants of data-driven partitions (DDP) and all data partitions (ADP) tests are implemented.}
 
 \usage{
-xdp.test(x, y, variant = 'ppr.33.obs', K = 3, correct.mi.bias = F)
+xdp.test(x, y, variant = 'DDP', K = 3, correct.mi.bias = F, w.sum = 0, w.max = 2)
 }
 
 \arguments{
   \item{x}{a numeric or ordered factor vector with observed \code{X} values.}
   \item{y}{a numeric or ordered factor vector with observed \code{Y} values, of the same length as \code{x}.}
-  \item{variant}{either 'spr.obs', 'spr.all', 'ppr.22.obs', 'ppr.33.obs', 'ppr.22.all', 'ppr.33.all', 'tpr.obs', 'tpr.all', 'ddp.obs', or 'ddp.all'. See details below.}
-  \item{K}{the dimension of the KxK partition. Relevant only for the 'ddp' variants, and must be between 2 and the square root of the length of the input vectors.}
+  \item{variant}{either 'DDP', 'ADP'.}
+  \item{K}{the dimension of the KxK partition. Must be between 2 and the square root of the length of the input vectors.}
   \item{correct.mi.bias}{a boolean specifying whether to apply the Miller-Madow bias correction that can be useful for mutual information estimation.}
+  \item{w.sum}{minimum expected frequency taken into account when computing the sum_chi statistic (must be non-negative, contribution of tables having cells with smaller values will be truncated to zero). Note this only effects the specialized algorithms for small \code{K} as described below.}
+  \item{w.max}{minimum expected frequency taken into account when computing the max_chi statistic (must be non-negative, contribution of tables having cells with smaller values will be truncated to zero). Note this only effects the specialized algorithms for small \code{K} as described below.}
 }
 
 \details{
-This is an implementation of the DDP/ADP class of univariate distribution-free tests (Kaufman et al., 2013). This class extends Hoeffding's test by considering data-driven (or all) partitions of an arbitrary order \code{KxK} of the paired sample (or rank) sapce. Being distribution-free, it does not require resampling for computing p-values, making it considerably faster to apply than the HHG test (see example below).
+This is an implementation of the DDP (data-driven partition) / ADP (all data partitions) class of univariate distribution-free tests (Kaufman et al., 2013). This class extends Hoeffding's test by considering data-driven (or all) partitions of an arbitrary order \code{KxK} of the paired sample (or rank) sapce. Being distribution-free, it does not require resampling for computing p-values, making it considerably faster to apply than the HHG test (see example below).
 
-Several different variants are implemented, which can be chosen by specifying the \code{variant} argument. The options are: 'spr.obs', 'spr.all', 'ppr.22.obs', 'ppr.33.obs', 'ppr.22.all', 'ppr.33.all', 'tpr.obs', 'tpr.all', 'ddp.obs', or 'ddp.all'. \emph{obs} variants implement DDP (data driven partition) tests, while \emph{all} variants implement ADP (all data partitions) tests. 
+Specialized algorithms are used for DDP with \code{K=2,3,4}, and ADP with \code{K=2}, which are of \code{O(n^1), O(n^2), O(n^3)} and \code{O(n^2)} time complexity, respectively (with \code{n = length(x)}). These algorithms compute, in addition to the sum-aggregated statistics which are available for any \code{K}, statistics based on max aggregation. These algorithms take \code{w.sum} and \code{w.max} into account.
 
-\emph{spr}, \emph{ppr}, and \emph{tpr} are optimized versions of the test for \code{K=2,3,4}, which are of \code{O(n^1), O(n^2), O(n^3)} time complexity, respectively (with \code{n = length(x)}). In the case of 'ppr' (\code{K=3}), there are two subvariants: '33' considers entire 3x3 contingency tables (similar to the test implemented for other \code{K} values); the '22' variant only looks at nonuniform distribution in the partition formed by the center cell versus the outer cells in every original 3x3 partition. The test for general \code{K} is implemented by the 'ddp' variants (so 'ddp.obs' is the general DDP test, and 'ddp.all' is the general ADP test). In this case \code{K} itself is given as a separate argument.
+For generating p-values, either simulate your own null tables as shown in the example below, or, if your sample size (\code{length(x)}) is available, use the pre-computed tables linked from Dr. Ruth Heller's website at \url{http://www.math.tau.ac.il/~ruheller/Software.html}. See the README file bundled with the tables for current details on availability and storage format. At the time of writing tables are available for sample sizes 30, 40, 50, 100, and 300. For each sample size, DDP and ADP tests with \code{K = 2:floor(sqrt(length(x)))} were computed. The tables contain 1e6 replicates (i.e., support p-values down to 1e-6), except for sample size 300 where currently we have 2e4 samples.
 }
 
 \value{
-The optimized variants 'spr', 'ppr', and 'tpr' return four statistics:
+The specialized cases return four statistics:
 
 \code{sum.chisq} - normalized sum of Pearson chi-squared statistics from the KxK contingency tables considered.
 
@@ -38,13 +40,11 @@ The optimized variants 'spr', 'ppr', and 'tpr' return four statistics:
 
 Sum statistics are normalized by the total number of partitions multiplied by \code{length(x)}, which is the scale for measuring mutual information (in natural digits, aka 'nats').
 
-As described in Kaufman et al. (2013), the \code{K > 4} variants 'ddp' and 'adp' resort to by-cell rather than by-partition enumeration, and thus do not currently return 'max' statistics (only 'sum' statistics are returned).
+As described in Kaufman et al. (2013), DDP with \code{K > 4} and ADP with \code{K > 2} resort to by-cell rather than by-partition enumeration, and thus cannot currently return 'max' statistics (only 'sum' statistics are returned).
 }
 
 \references{
-A Family of Consistent Univariate Distribution-Free Tests of Independence based on Sample Space Partitions. \emph{In preparation}.
-
-Benjamini, Y., and Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. \emph{Journal of the Royal Statistical Society Series} B, \bold{57}, 289-300.
+Kaufman S., Heller R., Heller Y., and Gorfine, M. (2013). Consistent distribution-free tests of association between univariate random variables. \emph{arXiv:1308.1559},
 }
 
 \author{
@@ -52,7 +52,7 @@ Benjamini, Y., and Hochberg, Y. (1995). Controlling the false discovery rate: a 
 }
 
 \note{
-The tests are designed for continuous random variables, so there should be no or very few ties in the input. Any ties in \code{x} and \code{y} are automatically resolved by random assignment of ranks (see the built-in function \code{rank}).
+The tests are consistent for continuous random variables, i.e. when there are no ties. Any ties that do exist in \code{x} and \code{y} are automatically resolved by random assignment of ranks (see the built-in function \code{rank}).
 }
 
 \examples{
@@ -88,12 +88,13 @@ if (0) {
   
   for (i in 2:nr.null.replicates) {
     y = sample(nr.samples)
-    ddp.nullsim[i] = xdp.test(x, y, variant = 'ppr.33.obs')$sum.lr
+    ddp.nullsim[i] = xdp.test(x, y, variant = 'DDP', K = 3)$sum.lr
   }
   
   ddp.critical.value = quantile(ddp.nullsim, probs = 1 - bonferroni.level)
 } else {
   # In the interest of saving time, this is what we get
+  # NOTE: Big Monte-Carlo simulated null distributions are available (see documentation)
   ddp.critical.value = 0.01569162
 }
 
@@ -101,7 +102,7 @@ if (0) {
 compute.xdp.for.pair = function(pair.idxs) {
   x = as.numeric(hughes[pair.idxs[1], ])
   y = as.numeric(hughes[pair.idxs[2], ])
-  return (xdp.test(x, y, variant = 'ppr.33.obs')$sum.lr)
+  return (xdp.test(x, y, variant = 'DDP', K = 3)$sum.lr)
 }
 
 ddp.obs = combn(nr.genes, 2, compute.xdp.for.pair, simplify = TRUE)

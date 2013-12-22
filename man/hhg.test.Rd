@@ -15,8 +15,8 @@ hhg.test(Dx, Dy, ties = T, w.sum = 0, w.max = 2, nr.perm = 10000,
   \item{Dx}{a symmetric matrix of doubles, where element [i, j] is a norm-based distance between x_i and x_j.}
   \item{Dy}{same as \code{Dx}, but for distances between y_i and y_j (user may choose any norm when computing \code{Dx}, \code{Dy}).}
   \item{ties}{a boolean specifying whether ties in Dx and/or Dy exist and are to be properly handled (requires more computation).}
-  \item{w.sum}{minimum expected frequency taken into account when computing the sum_chi statistic (must be non-negative, contribution of cells with smaller values will be truncated to zero).}
-  \item{w.max}{minimum expected frequency taken into account when computing the max_chi statistic (must be non-negative, contribution of cells with smaller values will be truncated to zero).}
+  \item{w.sum}{minimum expected frequency taken into account when computing the sum_chi statistic (must be non-negative, contribution of tables having cells with smaller values will be truncated to zero).}
+  \item{w.max}{minimum expected frequency taken into account when computing the max_chi statistic (must be non-negative, contribution of tables having cells with smaller values will be truncated to zero).}
   \item{nr.perm}{number of permutations from which a p-value is to be estimated (must be non-negative). Can be specified as zero if only the observed statistics are wanted, without p-values. The actual maximum number used may be slightly larger when using multiple processing cores. A Wald sequential probability ratio test is optionally implemented (ans is the default) which may push the p-value to 1 if it becomes clear it is going to be high. See details below.}
   \item{is.sequential}{boolean flag whether Wald's sequential test is desired, otherwise a simple Monte-Carlo computation of nr.perm permutations is performed.}
   \item{total.nr.tests}{the total number of hypotheses in the family of hypotheses simultaneously tested. This is used to derive default values for the parameters of the Wald sequential test, assuming a nominal 0.05 FDR level: \code{alpha.hyp = 0.05 / max(1, log(total.nr.tests)), alpha0 = 0.05, beta0 = min(0.01, 0.05 / total.nr.tests), eps = 0.01} (in which case, the user does not have to supply them). This is only relevant if \code{is.sequential} is true.}
@@ -69,6 +69,10 @@ Heller R., Heller Y., and Gorfine M. (2012). A consistent multivariate test of a
 Fay, M., and Kim., H., and Hachey, M. (2007). On Using Truncated Sequential Probability Ratio Test Boundaries for Monte Carlo Implementation of Hypothesis Tests. \emph{Journal of Computational and Graphical Statistics}, 16(4): 946-967.
 
 Benjamini, Y., and Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. \emph{Journal of the Royal Statistical Society Series} B, \bold{57}, 289-300.
+
+Hall, P. and Tajvidi, N. (2002). Permutation tests for equality of distributions in high-dimensional settings. Biometrika, 89 (2):359-374.
+
+Szekely, G., Rizzo, M., Bakirov, N. (2007). Measuring and testing independence by correlation of distances. The Annals of Statistics 35, 2769-2794.
 }
 
 \author{
