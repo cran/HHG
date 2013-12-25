@@ -1,4 +1,4 @@
-1587a8f5c33e0ce856eb6c934d4d2bbf *DESCRIPTION
+163a402f39e76dc76894e5a654c631ba *DESCRIPTION
 c991e994e7e46daf3724e958470bbc9b *NAMESPACE
 b485dd5ef8e873f559574dec0c7e01ae *R/HHG.R
 8134e48628602a73b3bc0a87dc21e87f *R/HHG_extras.R
@@ -13,7 +13,7 @@ d5002a1ad996657d2d6fe5ac274bed00 *man/hughes.Rd
 db8a2dd9c2008498929f507769af8e44 *src/HHG.h
 2b27a842b72e927e00c33b0dfdd2cd99 *src/Makevars
 2b27a842b72e927e00c33b0dfdd2cd99 *src/Makevars.win
-6a6a496f139d1943afd240bcc5adf27e *src/SequentialTest.cpp
+d3ced7bcfd7d65a32f3c7cd7e37065a3 *src/SequentialTest.cpp
 3ce58b335795f885a0708c15a8f7493b *src/SequentialTest.h
 b86ae9e5bfe0f364d82045917616e380 *src/StatsComputer.cpp
 7d525cd408939201b8d04ce03c7131fb *src/StatsComputer.h

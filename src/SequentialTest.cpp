@@ -471,7 +471,7 @@ void SequentialTest::get_pvalues(double* pvs) {
 		}
 		if (tt == CI_MVZ_NN_GRID_BW) {
 			for (int i = 0; i < nnh_cnt; ++i) {
-				pvs[6 + i] = NAN; // FIXME I'm not tracking these for now, can do it in R
+				pvs[6 + i] = -1; // FIXME I'm not tracking these for now, can do it in R
 			}
 		}
 	}
