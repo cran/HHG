@@ -44,7 +44,7 @@ As described in Kaufman et al. (2013), DDP with \code{K > 4} and ADP with \code{
 }
 
 \references{
-Kaufman S., Heller R., Heller Y., and Gorfine, M. (2013). Consistent distribution-free tests of association between univariate random variables. \emph{arXiv:1308.1559},
+Heller, R., Heller, Y., Kaufman S., & Gorfine, M. (2014). Consistent distribution-free tests of association between univariate random variables. \emph{arXiv:1308.1559}.
 }
 
 \author{

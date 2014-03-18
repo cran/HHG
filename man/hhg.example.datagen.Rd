@@ -18,9 +18,7 @@ hhg.example.datagen(n, example)
   When \code{example} is one of \{TwoClassUniv, FourClassUniv, TwoClassMultiv\}, a list is returned with elements \code{x} and \code{y}. \code{y} is a vector with values either 0 or 1 (for TwoClassUniv and TwoClassMultiv) or in 0:3 for (for FourClassUniv). \code{x} is a real valued random variable (TwoClassUniv and FourClassUniv) or vector (TwoClassMultiv) which is not independent of \code{y}.
 }
 \references{
-Newton, M.A. (2009), 
-Introducing the discussion paper by Szekely and Rizzo,
-Annals of applied statistics, 3 (4), 1233-1235. 
+Newton, M.A. (2009). Introducing the discussion paper by Szekely and Rizzo. \emph{Annals of applied statistics}, 3 (4), 1233-1235.
 }
 \author{
 Shachar Kaufman and Ruth Heller

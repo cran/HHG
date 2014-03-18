@@ -64,19 +64,19 @@ A data.frame with one variable per statistic and one sample per permutation.
 }
 
 \references{
-Heller R., Heller Y., and Gorfine M. (2012). A consistent multivariate test of association based on ranks of distances. \emph{arXiv:1201.3522v1}.
+Heller, R., Heller, Y., & Gorfine, M. (2013). A consistent multivariate test of association based on ranks of distances. \emph{Biometrika}, 100(2), 503-510.
 
-Fay, M., and Kim., H., and Hachey, M. (2007). On Using Truncated Sequential Probability Ratio Test Boundaries for Monte Carlo Implementation of Hypothesis Tests. \emph{Journal of Computational and Graphical Statistics}, 16(4): 946-967.
+Fay, M., Kim., H., & Hachey, M. (2007). On using truncated sequential probability ratio test boundaries for Monte Carlo implementation of hypothesis tests. \emph{Journal of Computational and Graphical Statistics}, 16(4), 946-967.
 
-Benjamini, Y., and Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. \emph{Journal of the Royal Statistical Society Series} B, \bold{57}, 289-300.
+Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. \emph{Journal of the Royal Statistical Society Series B}, 57, 289-300.
 
-Hall, P. and Tajvidi, N. (2002). Permutation tests for equality of distributions in high-dimensional settings. Biometrika, 89 (2):359-374.
+Hall, P. & Tajvidi, N. (2002). Permutation tests for equality of distributions in high-dimensional settings. \emph{Biometrika}, 89(2), 359-374.
 
-Szekely, G., Rizzo, M., Bakirov, N. (2007). Measuring and testing independence by correlation of distances. The Annals of Statistics 35, 2769-2794.
+Szekely, G., Rizzo, M., & Bakirov, N. (2007). Measuring and testing independence by correlation of distances. \emph{The Annals of Statistics}, 35, 2769-2794.
 }
 
 \author{
-  Shachar Kaufman, based on an earlier version by Ruth Heller and Yair Heller.
+  Shachar Kaufman, based in part on an earlier version by Ruth Heller and Yair Heller.
 }
 
 \note{

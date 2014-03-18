@@ -17,7 +17,7 @@ Functional Discovery via a Compendium of Expression Profiles. Hughes et al., Cel
 The full data is publicly available at \url{http://noble.gs.washington.edu/proj/microarray/Rosetta/}.
 }
 \references{
-The mutual information: Detecting and evaluating dependencies between variables. R. Steuer et al., Bioinformatics, 2002.
+Steuer, R., Kurths, J., Daub, C. O., Weise, J., & Selbig, J. (2002). The mutual information: detecting and evaluating dependencies between variables. \emph{Bioinformatics}, 18(suppl 2), S231-S240.
 }
 \examples{
 data(hughes)
