@@ -271,7 +271,7 @@ SEXP HHG(SEXP R_test_type, SEXP R_dx, SEXP R_dy, SEXP R_y,
 		parsed_extra_params.w_sum = w_sum;
 		parsed_extra_params.w_max = w_max;
 
-		if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST) {
+		if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST || IS_K_SAMPLE_DDP(tt) || tt == K_SAMPLE_EXISTING) {
 			count_unique_y(n, y, parsed_extra_params);
 		}
 
@@ -296,6 +296,8 @@ SEXP HHG(SEXP R_test_type, SEXP R_dx, SEXP R_dy, SEXP R_y,
 			for (int i = 0; i < parsed_extra_params.nnh_grid_cnt; ++i) {
 				parsed_extra_params.nnh_grid[i] = extra_params[2 + i];
 			}
+		} else if (IS_K_SAMPLE_DDP(tt) || IS_GOF_DDP(tt)) {
+			parsed_extra_params.M = extra_params[0]; // M stands for what "K" was in the regular DDP/ADP tests
 		}
 
 		//
@@ -674,6 +676,8 @@ static int get_available_nr_threads(void) {
 }
 
 static void count_unique_y(int n, double* y, ExtraParams& extra_params) {
+	// NOTE: this assumes y are in 0...K-1
+
 	int K = 0;
 	for (int i = 0; i < n; ++i) {
 		K = max(K, (int)(y[i]));

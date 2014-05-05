@@ -1,9 +1,9 @@
-\name{XDP}
+\name{xdp.test}
 \alias{xdp.test}
 
 \title{A Class of Consistent Univariate Distribution-Free Tests of Independence}
 
-\description{This function computes test statistics for the tests of independence between two random variables (\code{X} and \code{Y}) presented in Kaufman et al. (2013). Several specialized variants of data-driven partitions (DDP) and all data partitions (ADP) tests are implemented.}
+\description{This function computes test statistics for the tests of independence between two random variables (\code{X} and \code{Y}) presented in Heller et al. (2014). Several specialized variants of data-derived partitions (DDP) and all data partitions (ADP) tests are implemented.}
 
 \usage{
 xdp.test(x, y, variant = 'DDP', K = 3, correct.mi.bias = F, w.sum = 0, w.max = 2)
@@ -13,18 +13,18 @@ xdp.test(x, y, variant = 'DDP', K = 3, correct.mi.bias = F, w.sum = 0, w.max = 2
   \item{x}{a numeric or ordered factor vector with observed \code{X} values.}
   \item{y}{a numeric or ordered factor vector with observed \code{Y} values, of the same length as \code{x}.}
   \item{variant}{either 'DDP', 'ADP'.}
-  \item{K}{the dimension of the KxK partition. Must be between 2 and the square root of the length of the input vectors.}
-  \item{correct.mi.bias}{a boolean specifying whether to apply the Miller-Madow bias correction that can be useful for mutual information estimation.}
-  \item{w.sum}{minimum expected frequency taken into account when computing the sum_chi statistic (must be non-negative, contribution of tables having cells with smaller values will be truncated to zero). Note this only effects the specialized algorithms for small \code{K} as described below.}
-  \item{w.max}{minimum expected frequency taken into account when computing the max_chi statistic (must be non-negative, contribution of tables having cells with smaller values will be truncated to zero). Note this only effects the specialized algorithms for small \code{K} as described below.}
+  \item{K}{the size of the KxK partition. Must be between 2 and the square root of the length of the input vectors.}
+  \item{correct.mi.bias}{a boolean specifying whether to apply the Miller-Madow bias correction that may be useful for mutual information estimation.}
+  \item{w.sum}{minimum expected frequency taken into account when computing the \code{sum.chisq} statistic (must be non-negative, contribution of tables having cells with smaller values will be truncated to zero). Note this only effects the specialized algorithms for small \code{K} as described below.}
+  \item{w.max}{minimum expected frequency taken into account when computing the \code{max.chisq} statistic (must be non-negative, contribution of tables having cells with smaller values will be truncated to zero). Note this only effects the specialized algorithms for small \code{K} as described below.}
 }
 
 \details{
-This is an implementation of the DDP (data-driven partition) / ADP (all data partitions) class of univariate distribution-free tests (Kaufman et al., 2013). This class extends Hoeffding's test by considering data-driven (or all) partitions of an arbitrary order \code{KxK} of the paired sample (or rank) sapce. Being distribution-free, it does not require resampling for computing p-values, making it considerably faster to apply than the HHG test (see example below).
+This is an implementation of the DDP (data-derived partition) / ADP (all data partitions) class of univariate distribution-free tests (Heller et al., 2014). This class extends Hoeffding's test by considering data-derived (or all) partitions of an arbitrary order \code{KxK} of the paired sample (or rank) sapce. Being distribution-free, it does not require resampling for computing p-values, making it considerably faster to apply than the HHG test (see example below).
 
 Specialized algorithms are used for DDP with \code{K=2,3,4}, and ADP with \code{K=2}, which are of \code{O(n^1), O(n^2), O(n^3)} and \code{O(n^2)} time complexity, respectively (with \code{n = length(x)}). These algorithms compute, in addition to the sum-aggregated statistics which are available for any \code{K}, statistics based on max aggregation. These algorithms take \code{w.sum} and \code{w.max} into account.
 
-For generating p-values, either simulate your own null tables as shown in the example below, or, if your sample size (\code{length(x)}) is available, use the pre-computed tables linked from Dr. Ruth Heller's website at \url{http://www.math.tau.ac.il/~ruheller/Software.html}. See the README file bundled with the tables for current details on availability and storage format. At the time of writing tables are available for sample sizes 30, 40, 50, 100, and 300. For each sample size, DDP and ADP tests with \code{K = 2:floor(sqrt(length(x)))} were computed. The tables contain 1e6 replicates (i.e., support p-values down to 1e-6), except for sample size 300 where currently we have 2e4 samples.
+For generating p-values, either simulate your own null tables as shown in the example below, or, if your sample size (\code{length(x)}) is available, use the pre-computed tables linked from R. Heller's homepage at \url{http://www.math.tau.ac.il/~ruheller/Software.html}. See the README file bundled with the tables for current details on availability and storage format. At the time of writing tables are available for sample sizes 30, 40, 50, 100, and 300. For each sample size, DDP and ADP tests with \code{K = 2:floor(sqrt(length(x)))} were computed. The tables contain 1e6 replicates (i.e., support p-values down to 1e-6), except for sample size 300 where currently there are 2e4 samples.
 }
 
 \value{
@@ -40,7 +40,7 @@ The specialized cases return four statistics:
 
 Sum statistics are normalized by the total number of partitions multiplied by \code{length(x)}, which is the scale for measuring mutual information (in natural digits, aka 'nats').
 
-As described in Kaufman et al. (2013), DDP with \code{K > 4} and ADP with \code{K > 2} resort to by-cell rather than by-partition enumeration, and thus cannot currently return 'max' statistics (only 'sum' statistics are returned).
+As described in Heller et al. (2014), DDP with \code{K > 4} and ADP with \code{K > 2} resort to by-cell rather than by-partition enumeration, and thus cannot currently return 'max' statistics (only 'sum' statistics are returned).
 }
 
 \references{
@@ -52,7 +52,7 @@ Heller, R., Heller, Y., Kaufman S., & Gorfine, M. (2014). Consistent distributio
 }
 
 \note{
-The tests are consistent for continuous random variables, i.e. when there are no ties. Any ties that do exist in \code{x} and \code{y} are automatically resolved by random assignment of ranks (see the built-in function \code{rank}).
+The tests are consistent for continuous random variables, i.e., when there are no ties. Any ties that do exist in \code{x} and \code{y} are automatically resolved by random assignment of ranks (see the built-in function \code{rank}).
 }
 
 \examples{
@@ -116,5 +116,5 @@ summary(ddp.significant)
 # Result: There are 26 pairs out of the 45 performed here, where there is 
 # evidence of associated patterns! Had we analyzed this data with Pearson or 
 # Spearman correlation based testing, we would find only a small fraction of 
-# these associated pairs (see Kaufman et al., 2013).
+# these associated pairs (see Heller et al., 2014).
 }

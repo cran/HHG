@@ -187,6 +187,8 @@ void SequentialTest::run() {
 	// Sort distances
 	if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST || tt == NO_TIES_TEST || tt == GENERAL_TEST) {
 		sort_x_distances_per_row();
+	}
+	if (tt == NO_TIES_TEST || tt == GENERAL_TEST) {
 		sort_y_distances_per_row();
 	}
 	if (IS_CI_MVZ_TEST(tt)) {

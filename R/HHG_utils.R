@@ -16,29 +16,28 @@
 .UDF_SPPR_ALL      = as.integer(13)
 .UDF_DDP_OBS       = as.integer(14)
 .UDF_DDP_ALL       = as.integer(15)
-.CI_UVZ_NN         = as.integer(16)
-.CI_UVZ_GAUSSIAN   = as.integer(17)
-.CI_MVZ_NN         = as.integer(18)
-.CI_MVZ_GAUSSIAN   = as.integer(19)
-.CI_UDF_ADP_MVZ_NN = as.integer(20)
-.CI_MVZ_NN_GRID_BW = as.integer(21)
 
-.configure.wald.sequential = function(total.nr.tests, is.sequential, alpha.hyp, alpha0, beta0, eps) {
+
+.configure.wald.sequential = function(is.sequential, total.nr.tests, alpha.hyp, alpha0, beta0, eps) {
   if (!is.sequential) {
     total.nr.tests = 1 # just so that we set Wald parameters to *something* so we can pass them on to C (but their values will be ignored)
   }
   
   if (!is.null(total.nr.tests)) {
     if (total.nr.tests < 1) {
-      stop('total.nr.tests should be at least 1')
+      stop('seq.total.nr.tests should be at least 1')
+    }
+    
+    if (any(c(!is.null(alpha.hyp), !is.null(alpha0), !is.null(beta0), !is.null(eps)))) {
+      warning('Wald sequential parameters (seq.alpha.hyp, seq.alpha0, seq.beta0, seq.eps) provided by user but are overwritten by defaults. See documentation on when and how to specify these arguments.')
     }
     
     alpha.hyp = 0.05 / max(1, log(total.nr.tests))
     alpha0 = 0.05
     beta0 = min(0.01, 0.05 / total.nr.tests)
     eps = 0.01
-  } else if (any(is.null(c(alpha.hyp, alpha0, beta0, eps)))) {
-    stop('Either total.nr.tests or all of {alpha.hyp, alpha0, beta0, eps} must be specified (i.e. be non-null).')
+  } else if (any(c(is.null(alpha.hyp), is.null(alpha0), is.null(beta0), is.null(eps)))) {
+    stop('Either seq.total.nr.tests or all of {seq.alpha.hyp, seq.alpha0, seq.beta0, seq.eps} must be specified (i.e. be non-null).')
   }
   
   return (list(alpha.hyp, alpha0, beta0, eps))
@@ -74,14 +73,14 @@
   }
     
   if (extra.stats.wanted) {
-    ret$extras.edist = NA # currently not returned from C
+    # NOTE: these are actually only provided for the 2-sample test, for now
+    ret$extras.edist = res[6 + res.obs.stats.offest]
     ret$extras.ht = res[5 + res.obs.stats.offest]
     
     if (nr.perm > 0) {
-      ret$extras.perm.pval.edist = NA # currently not returned from C
+      ret$extras.perm.pval.edist = res[6]
       ret$extras.perm.pval.ht = res[5]
     }
-    
   }
   
   if (has.grid) {

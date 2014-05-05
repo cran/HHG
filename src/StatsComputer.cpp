@@ -37,7 +37,7 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 	this->dy = dy;
 	this->z = y; // in the case of some CI tests, y is actually z or dz
 
-	if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST || IS_UDF_TEST(tt)) {
+	if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST || IS_UDF_TEST(tt) || IS_K_SAMPLE_DDP(tt) || tt == K_SAMPLE_EXISTING) {
 		// A copy of y is created which will be permuted
 		this->y = new double[xy_nrow * y_ncol];
 		memcpy(this->y, y, sizeof(double) * xy_nrow * y_ncol);
@@ -85,6 +85,20 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 		sum_like_grid = new double[nnh_grid_cnt];
 		max_chi_grid  = new double[nnh_grid_cnt];
 		max_like_grid = new double[nnh_grid_cnt];
+	} else if (IS_K_SAMPLE_DDP(tt)) {
+		K = extra_params->K; // number of sub-samples (as in "K-sample problem")
+		M = extra_params->M; // order of partition
+		y_counts = extra_params->y_counts;
+	} else if (tt == K_SAMPLE_EXISTING) {
+		K = extra_params->K; // number of sub-samples (as in "K-sample problem")
+		M = 2; // order of partition (all classical tests use dichotomies)
+		y_counts = extra_params->y_counts;
+	} else if (IS_GOF_DDP(tt)) {
+		K = 1;
+		M = extra_params->M;
+	} else if (tt == GOF_EXISTING) {
+		K = 1;
+		M = 2;
 	}
 
 	// Allocate temporary buffers
@@ -124,7 +138,12 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 		hhg_gen_right_source_buffer = new int[xy_nrow / 2 + (xy_nrow & 1)];
 	}
 
-	if (IS_UDF_TEST(tt)) {
+	if (IS_K_SAMPLE_DDP(tt) || tt == K_SAMPLE_EXISTING) {
+		// OK, so in this case it is not a *double* integral; it is K single integrals
+		// the last row will hold the overall x integral (ignoring y)
+		dintegral_pn = xy_nrow + 1;
+		double_integral = new int[(K + 1) * dintegral_pn];
+	} else if (IS_UDF_TEST(tt)) {
 		if (tt == CI_UDF_ADP_MVZ_NN) {
 			dintegral_pn = nnh + 2;
 			nn_sorted_x.resize(nnh);
@@ -134,6 +153,11 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 			dintegral_zero_based_idxs = !(tt == UDF_DDP_OBS || tt == UDF_DDP_ALL);
 		}
 		double_integral = new int[dintegral_pn * dintegral_pn];
+	} else if (IS_GOF_DDP(tt) || tt == GOF_EXISTING) {
+		null_dist = new double[xy_nrow + 1]; // FIXME can just do this padding in R and then we won't have to create a copy
+		null_dist[0] = 0;
+		memcpy(null_dist + 1, y, sizeof(double) * xy_nrow);
+		null_dist[xy_nrow] = 1;
 	}
 
 	if (tt == UDF_DDP_ALL || tt == CI_UDF_ADP_MVZ_NN) {
@@ -141,6 +165,10 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 		adp_l = new double[xy_nrow];
 		adp_r = new double[xy_nrow];
 		precompute_adp();
+	} else if (IS_K_SAMPLE_DDP(tt) || IS_GOF_DDP(tt)) {
+		adp = new double[xy_nrow];
+		adp_l = new double[xy_nrow];
+		precompute_adp_k_sample();
 	}
 
 	y0_idx = y1_idx = NULL;
@@ -281,7 +309,7 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 
 		case CI_UDF_ADP_MVZ_NN:
 			stats_func  = &StatsComputer::hhg_ci_udf_adp_mvz_nn;
-			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			stats_func2 = &StatsComputer::other_stats_ci;
 			perm_y_func = &StatsComputer::resample_mvz_ci;
 		break;
 
@@ -289,6 +317,54 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 			stats_func  = &StatsComputer::hhg_ci_mvz_nn_grid;
 			stats_func2 = &StatsComputer::other_stats_ci;
 			perm_y_func = &StatsComputer::resample_mvz_ci;
+		break;
+
+		case K_SAMPLE_DDP_M2:
+			stats_func  = &StatsComputer::hhg_k_sample_ddp_m2;
+			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			perm_y_func = &StatsComputer::resample_univariate;
+		break;
+
+		case K_SAMPLE_DDP_M3:
+			stats_func  = &StatsComputer::hhg_k_sample_ddp_m3;
+			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			perm_y_func = &StatsComputer::resample_univariate;
+		break;
+
+		case K_SAMPLE_DDP:
+			stats_func  = &StatsComputer::hhg_k_sample_ddp;
+			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			perm_y_func = &StatsComputer::resample_univariate;
+		break;
+
+		case GOF_DDP_M2:
+			stats_func  = &StatsComputer::hhg_gof_ddp_m2;
+			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			perm_y_func = &StatsComputer::resample_univariate;
+		break;
+
+		case GOF_DDP_M3:
+			stats_func  = &StatsComputer::hhg_gof_ddp_m3;
+			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			perm_y_func = &StatsComputer::resample_univariate;
+		break;
+
+		case GOF_DDP:
+			stats_func  = &StatsComputer::hhg_gof_ddp;
+			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			perm_y_func = &StatsComputer::resample_univariate;
+		break;
+
+		case GOF_EXISTING:
+			stats_func  = &StatsComputer::hhg_gof_existing;
+			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			perm_y_func = &StatsComputer::resample_univariate;
+		break;
+
+		case K_SAMPLE_EXISTING:
+			stats_func  = &StatsComputer::hhg_k_sample_existing;
+			stats_func2 = &StatsComputer::other_stats_univar_dist_free;
+			perm_y_func = &StatsComputer::resample_univariate;
 		break;
 
 		default:
@@ -300,6 +376,7 @@ StatsComputer::StatsComputer(TestType tt, int xy_nrow, int y_ncol, double* dx, d
 	}
 
     sum_chi = sum_like = max_chi = max_like = ht = edist = 0;
+	kahan_c_chi = kahan_c_like = 0;
 }
 
 StatsComputer::~StatsComputer() {
@@ -333,7 +410,7 @@ StatsComputer::~StatsComputer() {
 		delete[] hhg_gen_right_source_buffer;
 	}
 
-	if (IS_UDF_TEST(tt)) {
+	if (IS_UDF_TEST(tt) || IS_K_SAMPLE_DDP(tt) || tt == K_SAMPLE_EXISTING) {
 		delete[] double_integral;
 	}
   
@@ -341,6 +418,13 @@ StatsComputer::~StatsComputer() {
 		delete[] adp;
 		delete[] adp_l;
 		delete[] adp_r;
+	} else if (IS_K_SAMPLE_DDP(tt) || IS_GOF_DDP(tt)) {
+		delete[] adp;
+		delete[] adp_l;
+	}
+
+	if (IS_GOF_DDP(tt) || tt == GOF_EXISTING) {
+		delete[] null_dist;
 	}
 
 	if (tt == CI_MVZ_NN_GRID_BW) {
@@ -1816,8 +1900,8 @@ void StatsComputer::hhg_udf_adp(void) {
 	// It is more stable numerically to accumulate the statistics in the order
 	// of rectangle area, this is why I use the (xl, yl, w, h) enumeration.
 	// While this helps stability, it may adversely affect memory locality...
+	// Maybe with the Kahan summation, this is no longer necessary?
   
-	// Now that I use Kahan summation maybe I can change back the ordering.
 	double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
 
 	for (int w = 1; w <= n; ++w) {
@@ -1985,7 +2069,508 @@ void StatsComputer::hhg_ci_udf_adp_mvz_nn(void) {
 #endif
 }
 
+// Existing K-sample distribution-free tests
+// (used in simulations as a reference to compare the to performance of our tests)
+void StatsComputer::hhg_k_sample_existing(void) {
+	// NOTE: The tests implemented here also exist in versions that use at-ranks grid for
+	// inducing dichotomies. This creates the question of how to estimate the
+	// empirical CDF at the partitioning points, and some people split each
+	// rank and count is as being left on each side of the partition. I avoid
+	// this by performing partitions at half-ranks as in ADP and our K-sample
+	// test. The effect of this is expected to be negligible.
+	// Also, I do not use w_sum/w_max. Maybe that's not fair but the intention
+	// is to compare to the "plain vanilla" classical tests.
+
+	int n = xy_nrow;
+	compute_single_integral(n, dx, y);
+
+	// will be abused for storing the statistics:
+	sum_chi  = 0; // Cramer-von Mises (Kiefer, 1959)
+	max_chi  = 0; // Kolmogorov-Smirnov (Kiefer, 1959)
+	sum_like = 0; // LR-based Cramer-von Mises (Zhang 2007)
+	max_like = 0; // LR-based Kolmogorov-Smirnov (Zhang 2007)
+
+	// FIXME: Could this be done faster?
+	// FIXME: may need to address roundoff issues
+	// TODO: collect individual tables if wanted
+
+	// NOTE: actually, this is very confusing, since Zhang doesn't simply switch from Pearson chi-squared
+	// to the G statistic, rather he also changes the weights when he defines his KS, AD, and CvM
+
+	// NOTE: this uses a "between-ranks" grid, where we partition between xi and xi+1
+	// M here is 2
+
+	double Nki, Nk, Eki, dt, d, lr, nrcp = 1.0 / n;
+
+	for (int i = 1; i < n; ++i) {
+		d = 0;
+		lr = 0;
+		for (int k = 0; k < K; ++k) {
+			Nk = y_counts[k];
+			Eki = Nk * nrcp * i;
+			Nki = double_integral[k * dintegral_pn + i];
+			dt = Nki - Eki;
+			d += dt * dt / Nk;
+			lr += (Nki != 0 && Nki != Nk) ? (Nki * log(Nki / Eki) + (Nk - Nki) * log((Nk - Nki) / (Nk - Eki))) : 0;
+		}
+
+		sum_chi += d;
+		max_chi = max(max_chi, d); // NOTE: sometimes the K-S statistic is defined with an L1 norm and sometimes with L2
+		sum_like += lr;
+		max_like = max(max_like, lr);
+	}
+}
+
+// K-sample DDP (also ADP) Kx2 test
+void StatsComputer::hhg_k_sample_ddp_m2(void) {
+	compute_single_integral(xy_nrow, dx, y);
+
+	int n = xy_nrow;
+	double nrmlz = 1.0 / n;
+
+	sum_chi  = 0;
+	max_chi  = 0;
+	sum_like = 0;
+	max_like = 0;
+
+	ng_chi  = 0;
+	ng_like = 0;
+
+	// FIXME: Could this be done faster?
+	// TODO: collect individual tables if wanted
+
+	// NOTE: this uses a "between-ranks" grid, where we partition between xi and xi+1
+	// M here is 2
+
+	double* tbl_o = new double[K * M];
+	double* tbl_e = new double[K * M];
+	double chi, like, etmp, emin;
+	int yiM;
+
+	for (int xi = 1; xi < n; ++xi) {
+		chi = like = 0;
+		emin = n;
+
+		for (int yi = 0; yi < K; ++yi) {
+			yiM = yi * M;
+
+			tbl_o[yiM + 0] = double_integral[yi * dintegral_pn + xi];
+			tbl_o[yiM + 1] = y_counts[yi] - double_integral[yi * dintegral_pn + xi];
+			tbl_e[yiM + 0] = y_counts[yi] * double_integral[K * dintegral_pn + xi] * nrmlz;
+			tbl_e[yiM + 1] = y_counts[yi] * (n - double_integral[K * dintegral_pn + xi]) * nrmlz;
+
+			chi += (  (tbl_o[yiM    ] - tbl_e[yiM    ]) * (tbl_o[yiM    ] - tbl_e[yiM    ]) / tbl_e[yiM    ]
+			        + (tbl_o[yiM + 1] - tbl_e[yiM + 1]) * (tbl_o[yiM + 1] - tbl_e[yiM + 1]) / tbl_e[yiM + 1]);
+
+			if (tbl_o[yiM] > 0) {
+				like += tbl_o[yiM] * log(tbl_o[yiM] / tbl_e[yiM]);
+			}
+			if (tbl_o[yiM + 1] > 0) {
+				like += tbl_o[yiM + 1] * log(tbl_o[yiM + 1] / tbl_e[yiM + 1]);
+			}
+
+			etmp = min(tbl_e[yiM], tbl_e[yiM + 1]);
+			emin = min(emin, etmp);
+		}
+
+		accumulate_local_stats(chi, like, emin);
+	}
+
+	delete[] tbl_o;
+	delete[] tbl_e;
+
+	ng_chi *= n;
+	ng_like *= n;
+	sum_chi /= ng_chi;
+	sum_like /= ng_like;
+}
+
+// K-sample DDP (also ADP) Kx3 test
+void StatsComputer::hhg_k_sample_ddp_m3(void) {
+	compute_single_integral(xy_nrow, dx, y);
+
+	int n = xy_nrow;
+	double nrmlz = 1.0 / n;
+
+	sum_chi  = 0;
+	max_chi  = 0;
+	sum_like = 0;
+	max_like = 0;
+
+	ng_chi  = 0;
+	ng_like = 0;
+
+	// FIXME: Could this be done in O(nlogn) time?
+	// TODO: collect individual tables if wanted
+
+	// NOTE: this uses a "between-ranks" grid, where we partition between xi and xi+1
+	// M here is 3
+
+	double* tbl_o = new double[K * M];
+	double* tbl_e = new double[K * M];
+	double chi, like, etmp, emin;
+	int yiM;
+
+	for (int xi = 1; xi < n - 1; ++xi) {
+		for (int xj = xi + 1; xj < n; ++xj) {
+			chi = like = 0;
+			emin = n;
+
+			for (int yi = 0; yi < K; ++yi) {
+				yiM = yi * M;
+
+				tbl_o[yiM + 0] =                 double_integral[yi * dintegral_pn + xi];
+				tbl_o[yiM + 1] =                 double_integral[yi * dintegral_pn + xj] - double_integral[yi * dintegral_pn + xi];
+				tbl_o[yiM + 2] =                 y_counts[yi]                            - double_integral[yi * dintegral_pn + xj];
+				tbl_e[yiM + 0] = y_counts[yi] *  double_integral[K  * dintegral_pn + xi] * nrmlz;
+				tbl_e[yiM + 1] = y_counts[yi] * (double_integral[K  * dintegral_pn + xj] - double_integral[K  * dintegral_pn + xi]) * nrmlz;
+				tbl_e[yiM + 2] = y_counts[yi] * (n                                       - double_integral[K  * dintegral_pn + xj]) * nrmlz;
+
+				chi += (  (tbl_o[yiM + 0] - tbl_e[yiM + 0]) * (tbl_o[yiM + 0] - tbl_e[yiM + 0]) / tbl_e[yiM + 0]
+						+ (tbl_o[yiM + 1] - tbl_e[yiM + 1]) * (tbl_o[yiM + 1] - tbl_e[yiM + 1]) / tbl_e[yiM + 1]
+						+ (tbl_o[yiM + 2] - tbl_e[yiM + 2]) * (tbl_o[yiM + 2] - tbl_e[yiM + 2]) / tbl_e[yiM + 2]);
+
+				if (tbl_o[yiM + 0] > 0) {
+					like += tbl_o[yiM + 0] * log(tbl_o[yiM + 0] / tbl_e[yiM + 0]);
+				}
+				if (tbl_o[yiM + 1] > 0) {
+					like += tbl_o[yiM + 1] * log(tbl_o[yiM + 1] / tbl_e[yiM + 1]);
+				}
+				if (tbl_o[yiM + 2] > 0) {
+					like += tbl_o[yiM + 2] * log(tbl_o[yiM + 2] / tbl_e[yiM + 2]);
+				}
+
+				etmp = min(tbl_e[yi * 2 + 0], tbl_e[yi * 2 + 1]);
+				etmp = min(etmp, tbl_e[yi * 2 + 2]);
+				emin = min(emin, etmp);
+			}
+
+			accumulate_local_stats(chi, like, emin);
+		}
+	}
+
+	delete[] tbl_o;
+	delete[] tbl_e;
+
+	sum_chi /= (double(n) * ng_chi);
+	sum_like /= (double(n) * ng_like);
+}
+
+// K-sample DDP (also ADP) KxM test
+void StatsComputer::hhg_k_sample_ddp(void) {
+	compute_single_integral(xy_nrow, dx, y);
+
+	int n = xy_nrow;
+	double nrmlz = 1.0 / n;
+
+	sum_chi  = 0;
+	sum_like = 0;
+
+	// These can't be computed this way
+	max_chi  = 0;
+	max_like = 0;
+
+	// TODO: collect individual tables if wanted
+
+	// NOTE: this uses a "between-ranks" grid, where we partition between xi and xi+1
+	// This algorithm works interval-wise rather than partition-wise.
+
+	double normalized_cnt;
+	double interval_o, interval_e, interval_c, interval_l;
+	double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+	int xj, wmax;
+
+	for (int xi = 0; xi < n; ++xi) {
+		wmax = min(n - M - 1, n - xi);
+
+		for (int w = 1; w <= wmax; ++w) {
+			xj = xi + w;
+
+			// TODO could be slightly optimized by going over edge intervals in a separate loop from mid intervals
+			if (xi == 0 || xj == n) {
+				// edge interval
+				normalized_cnt = adp_l[w];
+			} else {
+				// mid interval
+				normalized_cnt = adp[w];
+			}
+
+			for (int yi = 0; yi < K; ++yi) {
+				interval_o =                 double_integral[yi * dintegral_pn + xj] - double_integral[yi * dintegral_pn + xi];
+				interval_e = y_counts[yi] * (double_integral[K  * dintegral_pn + xj] - double_integral[K  * dintegral_pn + xi]) * nrmlz;
+
+				interval_c = ((interval_o - interval_e) * (interval_o - interval_e)) / interval_e * normalized_cnt - kahan_c_chi;
+				interval_l = ((interval_o > 0) ? (interval_o * log(interval_o / interval_e)) : 0) * normalized_cnt - kahan_c_like;
+
+				kahan_t = sum_chi + interval_c;
+				kahan_c_chi = (kahan_t - sum_chi) - interval_c;
+				sum_chi = kahan_t;
+
+				kahan_t = sum_like + interval_l;
+				kahan_c_like = (kahan_t - sum_like) - interval_l;
+				sum_like = kahan_t;
+			}
+		}
+	}
+
+	// the 1/n gets us to the MI scale
+	sum_chi /= n;
+	sum_like /= n;
+}
+
+// Existing GOF tests
+// (used in simulations as a reference to compare the to performance of our tests)
+void StatsComputer::hhg_gof_existing(void) {
+	// See general notes under hhg_gof_ddp() and hhg_k_sample_existing().
+
+	int n = xy_nrow;
+
+	// will be abused for storing the statistics:
+	sum_chi  = 0; // Cramer-von Mises (1928)
+	max_chi  = 0; // Kolmogorov-Smirnov (1933)
+	sum_like = 0; // LR-based Cramer-von Mises (Zhang 2006)
+	max_like = 0; // LR-based Kolmogorov-Smirnov (Zhang 2006)
+
+	// FIXME: Could this be done faster?
+	// TODO: collect individual tables if wanted
+
+	double Eki, dt, d, lr;
+
+	for (int i = 1; i < n; ++i) {
+		Eki = n * null_dist[i];
+		dt = i - Eki;
+		d = dt * dt / n;
+		lr = (i != 0 && i != n) ? (i * log(i / Eki) + (n - i) * log((n - i) / (n - Eki))) : 0;
+
+		sum_chi += d;
+		max_chi = max(max_chi, d); // NOTE: sometimes the K-S statistic is defined with an L1 norm and sometimes with L2
+		sum_like += lr;
+		max_like = max(max_like, lr);
+	}
+}
+
+// GOF DDP (also ADP) 1x2 test
+void StatsComputer::hhg_gof_ddp_m2(void) {
+	// See general notes under hhg_gof_ddp()
+
+	int n = xy_nrow;
+
+	sum_chi  = 0;
+	max_chi  = 0;
+	sum_like = 0;
+	max_like = 0;
+
+	ng_chi  = 0;
+	ng_like = 0;
+
+	// FIXME: Could this be done faster?
+	// TODO: collect individual tables if wanted
+
+	// NOTE: this uses a "between-ranks" grid, where we partition between xi and xi+1
+	// M here is 2
+
+	double* tbl_o = new double[M];
+	double* tbl_e = new double[M];
+	double chi, like, emin;
+
+	for (int xi = 1; xi < n; ++xi) {
+		tbl_o[0] = xi;
+		tbl_o[1] = n - xi;
+		tbl_e[0] = n * null_dist[xi];
+		tbl_e[1] = n * (1 - null_dist[xi]);
+
+		chi = (  (tbl_o[0] - tbl_e[0]) * (tbl_o[0] - tbl_e[0]) / tbl_e[0]
+			   + (tbl_o[1] - tbl_e[1]) * (tbl_o[1] - tbl_e[1]) / tbl_e[1]);
+
+		like = 0;
+		if (tbl_o[0] > 0) {
+			like += tbl_o[0] * log(tbl_o[0] / tbl_e[0]);
+		}
+		if (tbl_o[1] > 0) {
+			like += tbl_o[1] * log(tbl_o[1] / tbl_e[1]);
+		}
+
+		emin = min(tbl_e[0], tbl_e[1]);
+
+		accumulate_local_stats(chi, like, emin);
+	}
+
+	delete[] tbl_o;
+	delete[] tbl_e;
+
+	ng_chi *= n;
+	ng_like *= n;
+	sum_chi /= ng_chi;
+	sum_like /= ng_like;
+}
+
+// GOF DDP (also ADP) 1x3 test
+void StatsComputer::hhg_gof_ddp_m3(void) {
+	// See general notes under hhg_gof_ddp()
+
+	int n = xy_nrow;
+
+	sum_chi  = 0;
+	max_chi  = 0;
+	sum_like = 0;
+	max_like = 0;
+
+	ng_chi  = 0;
+	ng_like = 0;
+
+	// FIXME: Could this be done in O(nlogn) time?
+	// TODO: collect individual tables if wanted
+
+	// NOTE: this uses a "between-ranks" grid, where we partition between xi and xi+1
+	// M here is 3
+
+	double* tbl_o = new double[M];
+	double* tbl_e = new double[M];
+	double chi, like, etmp, emin;
+
+	for (int xi = 1; xi < n - 1; ++xi) {
+		for (int xj = xi + 1; xj < n; ++xj) {
+			tbl_o[0] = xi;
+			tbl_o[1] = xj - xi;
+			tbl_o[2] = n - xj;
+			tbl_e[0] = n * null_dist[xi];
+			tbl_e[1] = n * (null_dist[xj] - null_dist[xi]);
+			tbl_e[2] = n * (1 - null_dist[xj]);
+
+			chi = (  (tbl_o[0] - tbl_e[0]) * (tbl_o[0] - tbl_e[0]) / tbl_e[0]
+				   + (tbl_o[1] - tbl_e[1]) * (tbl_o[1] - tbl_e[1]) / tbl_e[1]
+				   + (tbl_o[2] - tbl_e[2]) * (tbl_o[2] - tbl_e[2]) / tbl_e[2]);
+
+			like = 0;
+			if (tbl_o[0] > 0) {
+				like += tbl_o[0] * log(tbl_o[0] / tbl_e[0]);
+			}
+			if (tbl_o[1] > 0) {
+				like += tbl_o[1] * log(tbl_o[1] / tbl_e[1]);
+			}
+			if (tbl_o[2] > 0) {
+				like += tbl_o[2] * log(tbl_o[2] / tbl_e[2]);
+			}
+
+			etmp = min(tbl_e[0], tbl_e[1]);
+			emin = min(etmp, tbl_e[2]);
+
+			accumulate_local_stats(chi, like, emin);
+		}
+	}
+
+	delete[] tbl_o;
+	delete[] tbl_e;
+
+	sum_chi /= (double(n) * ng_chi);
+	sum_like /= (double(n) * ng_like);
+}
+
+// GOF DDP (also ADP) 1xM test against a given null distribution
+void StatsComputer::hhg_gof_ddp(void) {
+	// It is assumed that y contains the null CDF, computed at the midpoints
+	// between every two consecutive observations (so there are n-1 given
+	// values between 0 and 1)
+
+	int n = xy_nrow;
+
+	sum_chi  = 0;
+	sum_like = 0;
+
+	// These can't be computed this way
+	max_chi  = 0;
+	max_like = 0;
+
+	// TODO: collect individual tables if wanted
+
+	// NOTE: this uses a "between-ranks" grid, where we partition between xi and xi+1
+	// For GOF testing, we could opt to partition at any point in the interval
+	// between every two consecutive observations, and this choice actually matters.
+	// The choice of the midpoints is arbitrary, but will do for now.
+
+	// This algorithm works interval-wise rather than partition-wise.
+
+	double normalized_cnt;
+	double interval_o, interval_e, interval_c, interval_l;
+	double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+	int xj, wmax;
+
+	for (int xi = 0; xi < n; ++xi) {
+		wmax = min(n - M - 1, n - xi);
+
+		for (int w = 1; w <= wmax; ++w) {
+			xj = xi + w;
+
+			// TODO could be slightly optimized by going over edge intervals in a separate loop from mid intervals
+			if (xi == 0 || xj == n) {
+				// edge interval
+				normalized_cnt = adp_l[w];
+			} else {
+				// mid interval
+				normalized_cnt = adp[w];
+			}
+
+			interval_o = xj - xi;
+			interval_e = (null_dist[xj] - null_dist[xi]) * n;
+
+			interval_c = ((interval_o - interval_e) * (interval_o - interval_e)) / interval_e * normalized_cnt - kahan_c_chi;
+			interval_l = ((interval_o > 0) ? (interval_o * log(interval_o / interval_e)) : 0) * normalized_cnt - kahan_c_like;
+
+			kahan_t = sum_chi + interval_c;
+			kahan_c_chi = (kahan_t - sum_chi) - interval_c;
+			sum_chi = kahan_t;
+
+			kahan_t = sum_like + interval_l;
+			kahan_c_like = (kahan_t - sum_like) - interval_l;
+			sum_like = kahan_t;
+		}
+	}
+
+	// the 1/n gets us to the MI scale
+	sum_chi /= n;
+	sum_like /= n;
+}
+
 // Some other statistics that we compare ourselves against
+// ================================================================================================
+
+void StatsComputer::other_stats_two_sample(void) {
+	// This representation of the data simplifies the computations of edist and HT
+	int j0 = 0, j1 = 0;
+	for (int i = 0; i < xy_nrow; ++i) {
+		if (y[i] == 0) {
+			y0_idx[j0++] = i;
+		} else {
+			y1_idx[j1++] = i;
+		}
+	}
+
+	// Compute edist (a version of distance correlation for the 2-sample problem)
+	compute_edist();
+
+	// Compute Hall & Tajvidi (2002) test
+	compute_ht();
+}
+
+void StatsComputer::other_stats_k_sample(void) {
+	// TODO
+	edist = 0;
+}
+
+void StatsComputer::other_stats_general(void) {
+	// TODO
+	edist = 0;
+}
+
+void StatsComputer::other_stats_univar_dist_free(void) {
+	// TODO, though I doubt this is meaningful
+	edist = 0;
+}
+
+void StatsComputer::other_stats_ci(void) {
+}
+
+// Helper functions
 // ================================================================================================
 
 void StatsComputer::accumulate_2x2_contingency_table(double a00, double a01, double a10, double a11, double nrmlz, double reps) {
@@ -2029,44 +2614,31 @@ void StatsComputer::accumulate_2x2_contingency_table(double a00, double a01, dou
 	}
 }
 
-void StatsComputer::other_stats_two_sample(void) {
-	// This representation of the data simplifies the computations of edist and HT
-	int j0 = 0, j1 = 0;
-	for (int i = 0; i < xy_nrow; ++i) {
-		if (y[i] == 0) {
-			y0_idx[j0++] = i;
-		} else {
-			y1_idx[j1++] = i;
-		}
+void StatsComputer::accumulate_local_stats(double chi, double like, double emin) {
+	double kahan_t, kahan_chi, kahan_like;
+
+	if (emin > w_sum) {
+		kahan_chi = chi - kahan_c_chi;
+		kahan_t = sum_chi + kahan_chi;
+		kahan_c_chi = (kahan_t - sum_chi) - kahan_chi;
+		sum_chi = kahan_t;
+		++ng_chi;
 	}
 
-	// Compute edist (a version of distance correlation for the 2-sample problem)
-	compute_edist();
+	if ((emin > w_max) && (chi > max_chi)) {
+		max_chi = chi;
+	}
 
-	// Compute Hall & Tajvidi (2002) test
-	compute_ht();
+	kahan_like = like - kahan_c_like;
+	kahan_t = sum_like + kahan_like;
+	kahan_c_like = (kahan_t - sum_like) - kahan_like;
+	sum_like = kahan_t;
+	++ng_like;
+
+	if (like > max_like) {
+		max_like = like;
+	}
 }
-
-void StatsComputer::other_stats_k_sample(void) {
-	// TODO
-	edist = 0;
-}
-
-void StatsComputer::other_stats_general(void) {
-	// TODO
-	edist = 0;
-}
-
-void StatsComputer::other_stats_univar_dist_free(void) {
-	// TODO, though I doubt this is meaningful
-	edist = 0;
-}
-
-void StatsComputer::other_stats_ci(void) {
-}
-
-// Helper functions
-// ================================================================================================
 
 void StatsComputer::hhg_gen_inversions(int *permutation, int *source, int *inversion_count, int dim) {
     if (dim <= 1) {
@@ -2125,6 +2697,29 @@ void StatsComputer::hhg_gen_merge(int *permutation, int *source, int *inversion_
             }
         }
     }
+}
+
+void StatsComputer::compute_single_integral(int n, double* xx, double* yy) {
+	memset(double_integral, 0, sizeof(int) * (K + 1) * dintegral_pn);
+
+	// Populate the padded matrix with the indicator variables of whether there
+	// is a point in the set {(x_k, y_k)}_k=1^n in the grid slot (i, j) for i in 1,2,...,n and j in 1,2,...,K
+	// NOTE: the last row holds the integral over all x, ignoring y
+	for (int i = 0; i < n; ++i) {
+		int yi = yy[i]; // assumed in 0..K-1, many ties, and won't be padded
+		int xi = xx[i]; // assumed in 1..n, no ties, and will be padded
+		double_integral[yi * dintegral_pn + xi] = 1;
+		double_integral[K  * dintegral_pn + xi] = 1;
+	}
+
+	// Then run linearly and compute the integral row by row
+	for (int k = 0; k <= K; ++k) {
+		int row_running_sum = 0;
+		for (int i = 1; i < dintegral_pn; ++i) {
+			row_running_sum += double_integral[k * dintegral_pn + i];
+			double_integral[k * dintegral_pn + i] = row_running_sum;
+		}
+	}
 }
 
 void StatsComputer::compute_double_integral(int n, double* xx, double* yy) {
@@ -2418,6 +3013,25 @@ void StatsComputer::precompute_adp(void) {
 		adp[xd] = my_choose(n - xd - 3, K - 3); // (the xd > n - 3 case is irrelevant)
 	}
 #endif
+}
+
+void StatsComputer::precompute_adp_k_sample(void) {
+	int n = xy_nrow;
+
+	// NOTE: in this test we would like to be able to use large samples, and the involved
+	// binomial coefficients can get much larger than the DOUBLE_XMAX. We thus need to
+	// take extra care to use logarithm binomial coefficients.
+	double log_denom = lchoose(n - 1, M - 1);
+
+	// edge-anchored interval (xi == 0)
+	for (int w = 1; w < n; ++w) {
+		adp_l[w] = exp(lchoose(n - w - 1, M - 2) - log_denom);
+	}
+
+	// mid interval
+	for (int w = 1; w <= n - 3; ++w) {
+		adp[w] = exp(lchoose(n - w - 3, M - 3) - log_denom);
+	}
 }
 
 double StatsComputer::my_choose(int n, int k) {

@@ -2,8 +2,8 @@
 
 # The general test of independence (with or without handling of ties)
 hhg.test = function(Dx, Dy, ties = T, w.sum = 0, w.max = 2, nr.perm = 10000, 
-  total.nr.tests = 1, is.sequential = T, alpha.hyp = NULL, alpha0 = NULL, beta0 = NULL, eps = NULL, 
-  nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
+  is.sequential = F, seq.total.nr.tests = 1, seq.alpha.hyp = NULL, seq.alpha0 = NULL, 
+  seq.beta0 = NULL, seq.eps = NULL, nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
 {
   # Argument checking is negligent at this point...
   if (!is.double(Dx) || !is.double(Dy) || !is.matrix(Dx) || !is.matrix(Dy) || 
@@ -27,7 +27,7 @@ hhg.test = function(Dx, Dy, ties = T, w.sum = 0, w.max = 2, nr.perm = 10000,
   extra_params = as.double(0)
   is_sequential = as.integer(is.sequential)
 
-  wald = .configure.wald.sequential(total.nr.tests, is.sequential, alpha.hyp, alpha0, beta0, eps)
+  wald = .configure.wald.sequential(is.sequential, seq.total.nr.tests, seq.alpha.hyp, seq.alpha0, seq.beta0, seq.eps)
   alpha_hyp = as.double(wald$alpha.hyp)
   alpha0 = as.double(wald$alpha0)
   beta0 = as.double(wald$beta0)
@@ -39,7 +39,7 @@ hhg.test = function(Dx, Dy, ties = T, w.sum = 0, w.max = 2, nr.perm = 10000,
   perm_stats_wanted = as.integer(perm.stats.wanted)
   
   res = .Call('HHG', test_type, Dx, Dy, dummy.y, w.sum, w.max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
-  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0, extra.stats.wanted = T)
+  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0, extra.stats.wanted = F)
   return (ret)
 }
 
@@ -93,10 +93,9 @@ xdp.test = function(x, y, variant = 'DDP', K = 3, correct.mi.bias = F,
 # (I'm keeping the old interface because some big simulations rely on it)
 .hhg.test.udfree = function(x, y, variant = 'ppr.33.obs', w.sum = 0, w.max = 2,
   nr.perm = 0, K = 3, correct.mi.bias = F, total.nr.tests = 1, 
-  is.sequential = T, alpha.hyp = NULL, alpha0 = NULL, beta0 = NULL, eps = NULL, 
+  is.sequential = F, alpha.hyp = NULL, alpha0 = NULL, beta0 = NULL, eps = NULL, 
   nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
 {
-  # Argument checking is negligent at this point...
   if (!is.vector(y)) {
     stop('y is expected to be a vector')
   }
@@ -163,7 +162,7 @@ xdp.test = function(x, y, variant = 'DDP', K = 3, correct.mi.bias = F,
   extra_params = as.double(c(K, correct.mi.bias))
   is_sequential = as.integer(is.sequential)
 
-  wald = .configure.wald.sequential(total.nr.tests, is.sequential, alpha.hyp, alpha0, beta0, eps)
+  wald = .configure.wald.sequential(is.sequential, total.nr.tests, alpha.hyp, alpha0, beta0, eps)
   alpha_hyp = as.double(wald$alpha.hyp)
   alpha0 = as.double(wald$alpha0)
   beta0 = as.double(wald$beta0)
