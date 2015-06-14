@@ -15,79 +15,33 @@
 
 struct Compute_permutations_thread_arg; // see below
 
-class SequentialTest {
+class SequentialTest : public TestIO, public ResamplingTestConfigurable {
 public:
-	SequentialTest(TestType tt, int xy_nrow, int y_ncol, double* dx, double* dy, double* y,
-			ExtraParams& extra_params,
-			bool is_sequential, double alpha, double alpha0, double beta0, double eps, int nr_perm,
-			int nr_threads, int base_seed, bool tables_wanted, bool perm_stats_wanted);
+	SequentialTest(TestIO& test_io, ResamplingTestConfigurable& resampling_test_params);
 	virtual ~SequentialTest();
 
-	bool is_null_rejected(void);
-	void get_pvalues(double* pvs);
-	void get_observed_stats(double* os);
-	void get_observed_tables(double* tbls); // returning double for passing back to R in a single structure (could save some memory if smarter about this)
-	void get_perm_stats(double* ps);
+	void run();
 
 protected:
-	void run();
+	void reset(void);
 	bool update_sequential(int statistic_idx, bool is_null_more_extreme);
-	bool update_sequential_all(double perm_sum_chi, double perm_sum_like, double perm_max_chi, double perm_max_like, double perm_ht, double perm_edist);
-
-	TestType tt;
-
-	int nr_perm;
-	int nr_threads;
-	int base_seed;
-
-	double alpha;
-	double alpha0;
-	double beta0;
-	double eps;
-
-	bool tables_wanted;
-	bool perm_stats_wanted;
+	bool update_sequential_all(double* perm_stats);
 
 	double lA, lB;
 	double exp1, exp2;
 
-	int nr_statistics;
 	double* llr;
 	int* pvalc;
 	bool* stopped_high;
 	bool* stopped_low;
 	int* perm_counter;
-	int perm_serial; // used to track the number of null samples actually generated
 
-    double obs_sum_chi, obs_sum_like, obs_max_chi, obs_max_like, obs_ht, obs_edist;
-    int* obs_tbls;
-    double *perm_sum_chi_v, *perm_sum_like_v, *perm_max_chi_v, *perm_max_like_v, *perm_ht_v, *perm_edist_v;
-    int orig_nr_perm;
-    double *obs_sum_chi_grid, *obs_sum_like_grid, *obs_max_chi_grid, *obs_max_like_grid;
-    double *perm_sum_chi_grid_m, *perm_sum_like_grid_m, *perm_max_chi_grid_m, *perm_max_like_grid_m;
-
-protected:
-	double *dx, *dy, *dz, *y;
-	int xy_nrow, y_ncol;
-	bool is_sequential;
-
-	static inline bool dbl_int_pair_comparator(const dbl_int_pair& l, const dbl_int_pair& r) { return l.first < r.first; }
-	static inline bool int_comparator(const int& l, const int& r) { return l < r; }
-
-	dbl_int_pair_matrix sorted_dx, sorted_dy, sorted_dz;
-
-	void count_unique_y(void);
-	void compute_distances(void);
-	void sort_x_distances_per_row(void);
-	void sort_y_distances_per_row(void);
-	void sort_z_distances_per_row(void);
+	double* local_perm_stats;
 
 	StatsComputer** scs;
 	volatile bool stop_all_flag;
 	pthread_mutex_t mutex;
-
-	ExtraParams& extra_params;
-
+	pthread_mutex_t rng_mutex;
 public: // this shouldn't be public but is made so due to pthread/c++ limitations
 	void compute_one_permutation(int t);
 	void compute_permutations(Compute_permutations_thread_arg* carg);

@@ -1,5 +1,6 @@
 # Main R file for the Heller-Heller-Gorfine test package
 
+
 # The general test of independence (with or without handling of ties)
 hhg.test = function(Dx, Dy, ties = T, w.sum = 0, w.max = 2, nr.perm = 10000, 
   is.sequential = F, seq.total.nr.tests = 1, seq.alpha.hyp = NULL, seq.alpha0 = NULL, 
@@ -18,12 +19,73 @@ hhg.test = function(Dx, Dy, ties = T, w.sum = 0, w.max = 2, nr.perm = 10000,
   }
   
   if (ties) {
-    test_type = .GENERAL_TEST
+    test_type = .MV_IND_HHG
   } else {
-    test_type = .NO_TIES_TEST
+    test_type = .MV_IND_HHG_NO_TIES
   }
 
   dummy.y = matrix(0, nrow(Dy), 1)
+  extra_params = as.double(0)
+  is_sequential = as.integer(is.sequential)
+  
+  wald = .configure.wald.sequential(is.sequential, seq.total.nr.tests, seq.alpha.hyp, seq.alpha0, seq.beta0, seq.eps)
+  alpha_hyp = as.double(wald$alpha.hyp)
+  alpha0 = as.double(wald$alpha0)
+  beta0 = as.double(wald$beta0)
+  eps = as.double(wald$eps)
+  
+  nr_perm = as.integer(nr.perm)
+  nr_threads = as.integer(nr.threads)
+  tables_wanted = as.integer(tables.wanted)
+  perm_stats_wanted = as.integer(perm.stats.wanted)
+  
+  res = .Call('HHG_R_C', test_type, Dx, Dy, dummy.y, w.sum, w.max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
+  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0)
+  
+  class(ret) = 'HHG.Test.Result'
+  ret$stat.type = 'hhg.test'
+  ret$n = nrow(Dx)
+  return (ret)
+}
+
+# The K-sample test (with y_i in 0:(K-1))
+hhg.test.k.sample = function(Dx, y, w.sum = 0, w.max = 2, nr.perm = 10000, 
+  is.sequential = F, seq.total.nr.tests = 1, seq.alpha.hyp = NULL, seq.alpha0 = NULL, 
+  seq.beta0 = NULL, seq.eps = NULL, nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
+{
+  # Argument checking is negligent at this point...
+  if (!is.vector(y)) {
+    stop('y is expected to be a vector')
+  }
+  if (!is.double(Dx) || !is.matrix(Dx) || 
+        nrow(Dx) != ncol(Dx) || nrow(Dx) != length(y)) {
+    stop('Dx is expected to be a square matrix of doubles, and must have the same number of rows/cols as the vector y')
+  }
+  if (w.sum < 0 || w.max < 0) {
+    stop('w.sum and w.max should be greater or equal to zero')
+  }
+  if (nr.perm < 0) {
+    stop('nr.perm should not be negative')
+  }
+  if (!is.numeric(y) && !is.factor(y) && !is.logical(y)) {
+    stop('y is expected to be a numeric, logical, or factor vector with values in {0, 1, ... K-1}')
+  }
+  if (is.factor(y)) {
+    y = as.numeric(levels(y))[y]
+  } else if (is.logical(y)) {
+    y = as.numeric(y)
+  }
+  if (any(y != round(y))) {
+    stop('y is expected to be a numeric, logical, or factor vector with values in {0, 1, ... K-1}')
+  }
+  if (max(y) > 10) {
+    warning('the K-sample test is appropriate for small values of K, consider using the general test, implemented by hhg.test')
+  }
+  
+  test_type = .MV_KS_HHG
+  
+  dummy.Dy = 0
+  y = as.matrix(as.double(y), nrow = length(y), ncol = 1)
   extra_params = as.double(0)
   is_sequential = as.integer(is.sequential)
 
@@ -37,132 +99,53 @@ hhg.test = function(Dx, Dy, ties = T, w.sum = 0, w.max = 2, nr.perm = 10000,
   nr_threads = as.integer(nr.threads)
   tables_wanted = as.integer(tables.wanted)
   perm_stats_wanted = as.integer(perm.stats.wanted)
-  
-  res = .Call('HHG', test_type, Dx, Dy, dummy.y, w.sum, w.max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
-  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0, extra.stats.wanted = F)
-  return (ret)
-}
-
-# The univariate distribution-free test
-xdp.test = function(x, y, variant = 'DDP', K = 3, correct.mi.bias = F, 
-  w.sum = 0, w.max = 2) 
-{
-  if (variant == 'DDP') {
-    if (K != as.integer(K) || K < 2) {
-      stop('K must be an integer greater than 1')
-    } else if (K == 2) {
-      x.variant = 'spr.obs'
-    } else if (K == 3) {
-      x.variant = 'ppr.33.obs'
-    } else if (K == 4) {
-      x.variant = 'tpr.obs'
-    } else {
-      x.variant = 'ddp.obs'
-    }
-  } else if (variant == 'ADP') {
-    if (K != as.integer(K) || K < 2) {
-      stop('K must be an integer greater than 1')
-    } else if (K == 2) {
-      x.variant = 'spr.all'
-    } else if (K == 3) {
-      # One could use 'ppr.33.all' that has the same complexity, but in practice it is much slower
-      x.variant = 'ddp.all'
-    } else if (K == 4) {
-      # tpr.all is too time consuming
-      x.variant = 'ddp.all'
-    } else {
-      x.variant = 'ddp.all'
-    }
-  }
-
-  ret = .hhg.test.udfree(x = x, y = y, variant = x.variant, K = K, correct.mi.bias = correct.mi.bias)
-  
-  if (((variant == 'DDP') && (K > 4)) || ((variant == 'ADP') && (K > 2))) {
-    ret$max.chisq = NA
-    ret$max.lr    = NA
-
-    if (!is.null(ret$perm.pval.hhg.mc)) {
-      ret$perm.pval.hhg.mc = NA
-      ret$perm.pval.hhg.ml = NA
-    }
-  }
     
+  res = .Call('HHG_R_C', test_type, Dx, dummy.Dy, y, w.sum, w.max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
+  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0)
+  
+  class(ret) = 'HHG.Test.Result'
+  ret$stat.type = 'hhg.test.k.sample'
+  ret$n = nrow(Dx)
+  ret$y = table(y)
   return (ret)
 }
 
-# (I'm keeping the old interface because some big simulations rely on it)
-.hhg.test.udfree = function(x, y, variant = 'ppr.33.obs', w.sum = 0, w.max = 2,
-  nr.perm = 0, K = 3, correct.mi.bias = F, total.nr.tests = 1, 
-  is.sequential = F, alpha.hyp = NULL, alpha0 = NULL, beta0 = NULL, eps = NULL, 
-  nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
+
+# The 2-sample test (with y_i in {0, 1})
+hhg.test.2.sample = function(Dx, y, w.sum = 0, w.max = 2, nr.perm = 10000, 
+  is.sequential = F, seq.total.nr.tests = 1, seq.alpha.hyp = NULL, seq.alpha0 = NULL, 
+  seq.beta0 = NULL, seq.eps = NULL, nr.threads = 0, tables.wanted = F, perm.stats.wanted = F)
 {
-  if (!is.vector(y)) {
-    stop('y is expected to be a vector')
+  # Argument checking is negligent at this point...
+  if (!is.numeric(y) && !is.factor(y) && !is.logical(y)) {
+    stop('y is expected to be a numeric, logical, or factor vector with values in {0, 1, ... K-1}')
   }
-  if (!is.vector(y) || length(x) != length(y)) {
-    stop('x is expected to be a vector, and must have the same length as the vector y')
+  if (!is.double(Dx) || !is.matrix(Dx) || nrow(Dx) != ncol(Dx) || nrow(Dx) != length(y)) {
+    stop('Dx is expected to be a square matrix of doubles, and must have the same number of rows/cols as the vector y')
+  }
+  if (w.sum < 0 || w.max < 0) {
+    stop('w.sum and w.max should be greater or equal to zero')
   }
   if (nr.perm < 0) {
     stop('nr.perm should not be negative')
   }
-  if (!is.numeric(y) && !is.ordered(y)) {
-    stop('y is expected to be a numeric or ordered vector')
+  if (is.factor(y)) {
+    y = as.numeric(levels(y))[y]
+  } else if (is.logical(y)) {
+    y = as.numeric(y)
   }
-  if (!is.numeric(x) && !is.ordered(x)) {
-    stop('x is expected to be a numeric or ordered vector')
-  }
-  if (K < 2 || K > length(x)) {
-    stop('K should be strictly between 2 and length(x)')
-  }
-
-  if (variant == 'spr.obs') {
-    test_type = .UDF_SPR_OBS
-  } else if (variant == 'spr.all') {
-    test_type = .UDF_SPR_ALL
-  } else if (variant == 'ppr.22.obs') {
-    test_type = .UDF_PPR_22_OBS
-  } else if (variant == 'ppr.22.all') {
-    test_type = .UDF_PPR_22_ALL
-  } else if (variant == 'ppr.33.obs') {
-    test_type = .UDF_PPR_33_OBS
-  } else if (variant == 'ppr.33.all') {
-    test_type = .UDF_PPR_33_ALL
-  } else if (variant == 'tpr.obs') {
-    test_type = .UDF_TPR_OBS
-  } else if (variant == 'tpr.all') {
-    test_type = .UDF_TPR_ALL
-  } else if (variant == 'sppr.obs') {
-    test_type = .UDF_SPPR_OBS
-  } else if (variant == 'sppr.all') {
-    test_type = .UDF_SPPR_ALL
-  } else if (variant == 'ddp.obs') {
-    test_type = .UDF_DDP_OBS
-  } else if (variant == 'ddp.all') {
-    test_type = .UDF_DDP_ALL
-  } else {
-  	stop('Unexpected variant specified.')
+  if (!all(y %in% c(0, 1))) {
+    stop('y is expected to be a numeric, logical, or factor vector with values in {0, 1}')
   }
   
-  # Dx is used to store x
-  Dx = as.matrix(as.double(rank(x, ties.method = 'random')), nrow = length(x), ncol = 1)
-  y = as.matrix(as.double(rank(y, ties.method = 'random')), nrow = length(y), ncol = 1)
-
-  # For DDP, Dy is used to store x.sorted.by.y (first column), and y.sorted.by.x (second column)
-  if (variant == 'ddp.obs' || variant == 'ddp.all') {
-    Dy = cbind(Dx[order(y)], y[order(Dx)])
-  } else {
-    Dx = Dx - 1
-    Dy = 0
-    y = y - 1
-  }
+  test_type = .MV_TS_HHG
   
-  w_sum = as.double(w.sum)
-  w_max = as.double(w.max)
-
-  extra_params = as.double(c(K, correct.mi.bias))
+  dummy.Dy = 0
+  y = as.matrix(as.double(y), nrow = length(y), ncol = 1)
+  extra_params = as.double(0)
   is_sequential = as.integer(is.sequential)
 
-  wald = .configure.wald.sequential(is.sequential, total.nr.tests, alpha.hyp, alpha0, beta0, eps)
+  wald = .configure.wald.sequential(is.sequential, seq.total.nr.tests, seq.alpha.hyp, seq.alpha0, seq.beta0, seq.eps)
   alpha_hyp = as.double(wald$alpha.hyp)
   alpha0 = as.double(wald$alpha0)
   beta0 = as.double(wald$beta0)
@@ -172,8 +155,63 @@ xdp.test = function(x, y, variant = 'DDP', K = 3, correct.mi.bias = F,
   nr_threads = as.integer(nr.threads)
   tables_wanted = as.integer(tables.wanted)
   perm_stats_wanted = as.integer(perm.stats.wanted)
+    
+  res = .Call('HHG_R_C', test_type, Dx, dummy.Dy, y, w.sum, w.max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
+  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0)
   
-  res = .Call('HHG', test_type, Dx, Dy, y, w_sum, w_max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
-  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0, extra.stats.wanted = F)
+  class(ret) = 'HHG.Test.Result'
+  ret$stat.type = 'hhg.test.2.sample'
+  ret$n = nrow(Dx)
+  ret$y = table(y)
+  
   return (ret)
 }
+
+
+
+#function for printing the univariate object
+print.HHG.Test.Result = function(x,...){
+  if(x$stat.type == 'hhg.test'){
+    cat(paste0('Results for the HHG test of independence:\n'))
+    cat(paste0('Number of observations: ',x$n,'\n'))
+  }else if(x$stat.type == 'hhg.test.2.sample'){
+    cat(paste0('Results for the HHG test for equality of distributions, with two groups:\n'))
+    cat(paste0('Number of observations: ',x$n,'\n'))
+    cat(paste0('Group sizes: \n'))
+    cat(paste(x$y))
+    cat('\n')
+  }else if(x$stat.type == 'hhg.test.k.sample'){
+    cat(paste0('Results for the HHG test for equality of distributions, with K>=2 groups:\n'))
+    cat(paste0('Number of observations: ',x$n,'\n'))
+    cat(paste0('Group sizes: \n'))
+    cat(paste(x$y))
+    cat('\n')
+  }
+  cat('\n')
+  cat(paste0('Sum of chi-squared scores of all 2X2 tables: ',format(x$sum.chisq,nsmall = 3),'\n'))
+  if('perm.pval.hhg.sc' %in% names(x)){
+    cat(paste0('P-value for the sum of chi-squared scores statistic : ',format(x$perm.pval.hhg.sc,digits = 3),'\n'))
+  }
+  cat('\n')
+  
+  cat(paste0('Sum of likelihood ratio scores of all 2X2 tables: ',format(x$sum.lr,nsmall = 3),'\n'))
+  if('perm.pval.hhg.sl' %in% names(x)){
+    cat(paste0('P-value for the sum of likelihood ratio scores statistic : ',format(x$perm.pval.hhg.sl,digits = 3),'\n'))
+  }
+  cat('\n')
+  
+  cat(paste0('Maximum over chi-squared scores of all 2X2 tables: ',format(x$max.chisq,nsmall = 3),'\n'))
+  if('perm.pval.hhg.mc' %in% names(x)){
+    cat(paste0('P-value for the max of chi-squared scores statistic : ',format(x$perm.pval.hhg.mc,digits = 3),'\n'))
+  }
+  cat('\n')
+  
+  cat(paste0('Maximum over likelihood ratio scores of all 2X2 tables: ',format(x$max.lr,nsmall = 3),'\n'))
+  if('perm.pval.hhg.ml' %in% names(x)){
+    cat(paste0('P-value for the max of likelihood ratio scores statistic : ',format(x$perm.pval.hhg.ml,digits = 3),'\n'))
+  }
+  cat('\n')
+}
+
+
+

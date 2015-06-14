@@ -6,12 +6,6 @@
 // Description : An implementation of the Heller-Heller-Gorfine test
 //============================================================================
 
-// BUILD NOTE:
-// - The standalone debugging variant should be built with -DDEBUG_INTERFACE -lpthread
-// - On Windows, the R variant of this needs to be built with (don't forget to define R_INTERFACE):
-//   R CMD SHLIB HHG.cpp SequentialTest.cpp StatsComputer.cpp -pthread
-// - The standalone GWAS variant should be built with -DGWAS_INTERFACE -lpthread
-
 #ifdef WIN32
 #include <Windows.h>
 #else
@@ -36,325 +30,43 @@
 
 using namespace std;
 
-static int get_available_nr_threads(void);
-static void count_unique_y(int n, double* y, ExtraParams& extra_params);
-
-#ifndef R_INTERFACE
-static void read_data_file(ifstream& ifs, int skp_first_lines, int skp_first_fields, int n, int m, double* buf);
-static void compute_01_distances(int n, int p, double* v, double *dv);
-static void compute_hamming_distances(int n, int p, double* v, double *dv);
-static void compute_lp_distances(int n, int p, int norm_p, double* v, double *dv);
-static void compute_rm_distances(int n, int p, double* v, double *dv);
-static string portable_double2str(double);
-#endif
-
-#ifdef DEBUG_INTERFACE
-
-static void test_hhg(string test_type_str, int nr_reps, int nr_perm, int nr_threads);
-static long long get_time_ms(void);
-
-// Entry point
-// ============================================================================
-
-int main(int argc, char** argv) {
-	if (argc != 4) {
-		cerr << "Usage: " << argv[0] << " test_type nr_reps nr_perm" << endl;
-		exit(1);
-	}
-
-	string test_type_str = argv[1];
-	int nr_reps = atoi(argv[2]);
-	int nr_perm = atoi(argv[3]);
-
-	int nr_threads = get_available_nr_threads();
-
-	test_hhg(test_type_str, nr_reps, nr_perm, nr_threads);
-
-#ifndef NO_THREADS
-	pthread_exit(NULL); // recommended by pthreads documentation
-#endif
-
-	return 0;
-}
-
-static void test_hhg(string test_type_str, int nr_reps, int nr_perm, int nr_threads) {
-	TestType tt;
-	string x_filename, y_filename;
-
-#ifdef WIN32
-	x_filename = "C:\\Library\\Work with Ruth Heller\\HHG\\";
-	y_filename = "C:\\Library\\Work with Ruth Heller\\HHG\\";
-#else
-	x_filename = "../";
-	y_filename = "../";
-#endif
-
-	if (test_type_str == "g") {
-		tt = GENERAL_TEST;
-		x_filename += "tmp.g.data.Dx";
-		y_filename += "tmp.g.data.Dy";
-	} else if (test_type_str == "k") {
-		tt = K_SAMPLE_TEST;
-		x_filename += "tmp.k.data.Dx";
-		y_filename += "tmp.k.data.y";
-	} else if (test_type_str == "2") {
-		tt = TWO_SAMPLE_TEST;
-		x_filename += "tmp.2.data.Dx";
-		y_filename += "tmp.2.data.y";
-	} else if (test_type_str == "1") {
-		tt = UDF_PPR_33_OBS;
-		x_filename += "tmp.1.data.x";
-		y_filename += "tmp.1.data.y";
-	}
-
-	double alpha = 0.002;
-	double alpha0 = 0.05;
-	double beta0 = 0.000025;
-	double eps = 0.01;
-	double w_sum = 0;
-	double w_max = 2;
-
-	ifstream x_ifs(x_filename.c_str());
-	ifstream y_ifs(y_filename.c_str());
-	if (!x_ifs || !y_ifs) {
-		cerr << "where is the data?" << endl;
-		exit(1);
-	}
-
-	string buf;
-	int n = 0;
-	while (getline(y_ifs, buf)) ++n;
-	y_ifs.clear();
-	y_ifs.seekg(0);
-
-	// TODO determine from input files
-	int y_ncol = 1;
-
-	double* y = new double[n * y_ncol];
-	double* dx = new double[n * n];
-	double* dy = new double[n * n];
-
-	cout << "Reading data from debug files" << endl;
-
-	switch (tt) {
-		case TWO_SAMPLE_TEST:
-		case K_SAMPLE_TEST:
-			read_data_file(x_ifs, 0, 0, n, n, dx);
-			read_data_file(y_ifs, 0, 0, n, 1, y);
-		break;
-
-		case GENERAL_TEST:
-			read_data_file(x_ifs, 0, 0, n, n, dx);
-			read_data_file(y_ifs, 0, 0, n, n, dy);
-		break;
-
-		case UDF_SPR_OBS:
-		case UDF_SPR_ALL:
-			read_data_file(x_ifs, 0, 0, n, 1, dx);
-			read_data_file(y_ifs, 0, 0, n, 1, y);
-		break;
-
-		default:
-			cerr << "What test is this?" << endl;
-			exit(1);
-		break;
-	}
-
-	cout << "Computing HHG" << endl;
-
-	double sum_chi, sum_like, max_chi, max_like, ht, edist;
-	double p_sum_chi, p_sum_like, p_max_chi, p_max_like, p_ht, p_edist;
-
-	long long ts_start = get_time_ms();
-	for (int i = 0; i < nr_reps; ++i) {
-		cout << "  Iteration " << i << "..." << endl;
-
-		SequentialTest seq(tt, n, y_ncol, dx, dy, y, w_sum, w_max, true, alpha, alpha0, beta0, eps, nr_perm, nr_threads, 0, false, false);
-
-		seq.get_observed_stats(sum_chi, sum_like, max_chi, max_like, ht, edist);
-		seq.get_pvalues(p_sum_chi, p_sum_like, p_max_chi, p_max_like, p_ht, p_edist);
-	}
-
-	cout << "Milliseconds elapsed during computation: " << get_time_ms() - ts_start << endl;
-
-	cout << "Computed statistics (and p-values):" << endl;
-	cout << "SC: " << sum_chi << " (" << p_sum_chi << ")" << endl;
-	cout << "SL: " << sum_like << " (" <<  p_sum_like << ")"  << endl;
-	cout << "MC: " << max_chi << " (" <<  p_max_chi << ")"  << endl;
-	cout << "ML: " << max_like << " (" <<  p_max_like << ")"  << endl;
-	cout << "HT: " << ht << " (" <<  p_ht << ")"  << endl;
-	cout << "ED: " << edist << " (" <<  p_edist << ")"  << endl;
-
-	delete[] y;
-	delete[] dx;
-	delete[] dy;
-}
-
-static long long get_time_ms(void) {
-#ifdef WIN32
-	FILETIME ft;
-	LARGE_INTEGER li;
-
-	/* Get the amount of 100 nano seconds intervals elapsed since January 1, 1601 (UTC) and copy it
-	 * to a LARGE_INTEGER structure. */
-	GetSystemTimeAsFileTime(&ft);
-	li.LowPart = ft.dwLowDateTime;
-	li.HighPart = ft.dwHighDateTime;
-
-	unsigned long long ret = li.QuadPart;
-	ret -= 116444736000000000LL; /* Convert from file time to UNIX epoch time. */
-	ret /= 10000; /* From 100 nano seconds (10^-7) to 1 millisecond (10^-3) intervals */
-
-	return ret;
-#else // => Linux
-	struct timeval tv;
-
-	gettimeofday(&tv, NULL);
-
-	unsigned long long ret = tv.tv_usec;
-	/* Convert from micro seconds (10^-6) to milliseconds (10^-3) */
-	ret /= 1000;
-
-	/* Adds the seconds (10^0) after converting them to milliseconds (10^-3) */
-	ret += (tv.tv_sec * 1000);
-
-	return ret;
-#endif // WIN32/Linux
-}
-
-#endif // DEBUG_INTERFACE
-
-#ifdef R_INTERFACE
+// Functions called form R
+// ================================================================================================
 
 extern "C" {
 
-SEXP HHG(SEXP R_test_type, SEXP R_dx, SEXP R_dy, SEXP R_y,
-		 SEXP R_w_sum, SEXP R_w_max, SEXP R_extra_params,
+SEXP HHG_R_C(SEXP R_test_type, SEXP R_dx, SEXP R_dy, SEXP R_y,
+		 SEXP R_w_sum, SEXP R_w_max, SEXP R_resampling_test_params,
 		 SEXP R_is_sequential, SEXP R_alpha, SEXP R_alpha0, SEXP R_beta0, SEXP R_eps, SEXP R_nr_perm,
 		 SEXP R_nr_threads, SEXP R_tables_wanted, SEXP R_perm_stats_wanted)
 {
 	try {
-		int test_type = *INTEGER(R_test_type);
-		double* dx = REAL(R_dx);
-		double* dy = REAL(R_dy);
-		double* y = REAL(R_y);
-		double w_sum = *REAL(R_w_sum);
-		double w_max = *REAL(R_w_max);
-		double* extra_params = REAL(R_extra_params);
-		bool is_sequential = (*INTEGER(R_is_sequential) != 0);
-		double alpha = *REAL(R_alpha);
-		double alpha0 = *REAL(R_alpha0);
-		double beta0 = *REAL(R_beta0);
-		double eps = *REAL(R_eps);
-		int nr_perm = *INTEGER(R_nr_perm);
-		int nr_threads = *INTEGER(R_nr_threads);
-		bool tables_wanted = (*INTEGER(R_tables_wanted) != 0);
-		bool perm_stats_wanted = (*INTEGER(R_perm_stats_wanted) != 0);
+		//
+		// Parse arguments sent by R, and instantiate the necessary object
+		//
 
-		if (nr_threads == 0) {
-			nr_threads = get_available_nr_threads();
-		}
-
+		ScoreType score_type = (ScoreType)*INTEGER(R_test_type);
 		SEXP Rdim = getAttrib(R_y, R_DimSymbol);
-		int n = INTEGER(Rdim)[0];
-		int y_ncol = INTEGER(Rdim)[1];
 
-		//
-		// Test type and any specific parameters:
-		//
-
-		// FIXME I'll have to clean this up at some point...
-
-		TestType tt = (TestType)test_type;
-		ExtraParams parsed_extra_params;
-
-		parsed_extra_params.w_sum = w_sum;
-		parsed_extra_params.w_max = w_max;
-
-		if (tt == TWO_SAMPLE_TEST || tt == K_SAMPLE_TEST || IS_K_SAMPLE_DDP(tt) || tt == K_SAMPLE_EXISTING) {
-			count_unique_y(n, y, parsed_extra_params);
-		}
-
-		if (tt == UDF_DDP_OBS || tt == UDF_DDP_ALL) {
-			parsed_extra_params.K = extra_params[0];
-			parsed_extra_params.correct_mi_bias = extra_params[1];
-		} else if (tt == CI_UVZ_NN || tt == CI_MVZ_NN) {
-			parsed_extra_params.nnh = extra_params[0];
-			parsed_extra_params.nnh_lsb = extra_params[1];
-		} else if (tt == CI_UVZ_GAUSSIAN || tt == CI_MVZ_GAUSSIAN) {
-			parsed_extra_params.sig = extra_params[0];
-			parsed_extra_params.nnh_lsb = extra_params[1];
-		} else if (tt == CI_UDF_ADP_MVZ_NN) {
-			parsed_extra_params.K = extra_params[0];
-			parsed_extra_params.correct_mi_bias = extra_params[1];
-			parsed_extra_params.nnh = extra_params[2];
-			parsed_extra_params.nnh_lsb = extra_params[3];
-		} else if (tt == CI_MVZ_NN_GRID_BW) {
-			parsed_extra_params.nnh_grid_cnt = extra_params[0];
-			parsed_extra_params.nnh_lsb = extra_params[1];
-			parsed_extra_params.nnh_grid = new int[parsed_extra_params.nnh_grid_cnt];
-			for (int i = 0; i < parsed_extra_params.nnh_grid_cnt; ++i) {
-				parsed_extra_params.nnh_grid[i] = extra_params[2 + i];
-			}
-		} else if (IS_K_SAMPLE_DDP(tt) || IS_GOF_DDP(tt)) {
-			parsed_extra_params.M = extra_params[0]; // M stands for what "K" was in the regular DDP/ADP tests
-		}
+		ResamplingTestConfigurable resampling_test_params(score_type, *REAL(R_w_sum), *REAL(R_w_max), REAL(R_resampling_test_params), *INTEGER(R_nr_perm), *INTEGER(R_is_sequential) != 0, *REAL(R_alpha), *REAL(R_alpha0), *REAL(R_beta0), *REAL(R_eps), 0, *INTEGER(R_nr_threads));
+		TestIO test_io(INTEGER(Rdim)[0], INTEGER(Rdim)[1], REAL(R_dx), REAL(R_dy), REAL(R_y), *INTEGER(R_tables_wanted) != 0, *INTEGER(R_perm_stats_wanted) != 0, resampling_test_params);
+		SequentialTest seq(test_io, resampling_test_params);
 
 		//
 		// Showtime
 		//
 
-		SequentialTest seq(tt, n, y_ncol, dx, dy, y, parsed_extra_params, is_sequential, alpha, alpha0, beta0, eps, nr_perm, nr_threads, 0, tables_wanted, perm_stats_wanted);
-
-		//
-		// Organize results
-		//
-
-		int total_nr_stats = 6;
-		if (tt == CI_MVZ_NN_GRID_BW) {
-			total_nr_stats += 4 * parsed_extra_params.nnh_grid_cnt;
-		}
-
-		int res_pvals_offset = 0;
-		int res_obs_stats_offest = total_nr_stats;
-		int res_tables_offset = total_nr_stats * 2;
-		int res_tables_size = 4 * n * n * tables_wanted;
-		int res_perm_stats_offset = res_tables_offset + res_tables_size;
-		int res_perm_stats_size = total_nr_stats * nr_perm * perm_stats_wanted;
-		int res_size = total_nr_stats * 2 + res_tables_size + res_perm_stats_size;
-
-		SEXP R_res;
-		PROTECT(R_res = allocMatrix(REALSXP, res_size, 1));
-		double* res = REAL(R_res);
-
-		seq.get_pvalues(res + res_pvals_offset);
-		seq.get_observed_stats(res + res_obs_stats_offest);
-
-		if (tables_wanted) {
-			seq.get_observed_tables(res + res_tables_offset);
-		}
-
-		if (perm_stats_wanted) {
-			seq.get_perm_stats(res + res_perm_stats_offset);
-		}
+		seq.run();
 
 		//
 		// Cleanup
 		//
 
-		if (parsed_extra_params.y_counts != NULL) {
-			delete[] parsed_extra_params.y_counts;
-		}
+		test_io.release();
 
-		if (tt == CI_MVZ_NN_GRID_BW) {
-			delete[] parsed_extra_params.nnh_grid;
-		}
+		// Hmm... I can't call the recommended pthread_exit(). It doesn't seem to be critical, unless joining encountered a problem.
 
-		UNPROTECT(1);
-
-		// FIXME hmm, I can't call the recommended pthread_exit(). It doesn't seem to be critical, unless joining encountered a problem.
-
-		return (R_res);
+		return (test_io.R_output);
 	} catch (exception& e) {
 		Rprintf(e.what());
 		SEXP R_res;
@@ -366,302 +78,488 @@ SEXP HHG(SEXP R_test_type, SEXP R_dx, SEXP R_dy, SEXP R_y,
 
 }
 
-#endif // R_INTERFACE
+// TestInput
+// ================================================================================================
 
-#ifdef GWAS_INTERFACE
+TestIO::TestIO(int xy_nrow, int y_ncol, double* dx, double* dy, double* y, bool tables_wanted, bool perm_stats_wanted, ResamplingTestConfigurable& resampling_test_params) :
+		xy_nrow(xy_nrow), y_ncol(y_ncol), dx(dx), dy(dy), y(y), tables_wanted(tables_wanted), perm_stats_wanted(perm_stats_wanted)
+{
+	null_dist = z = dz = y; // aliases, used only for readability
 
-// Entry point
-// ============================================================================
+	nr_groups = 0;
+	y_counts = NULL;
 
-/*
- *
- * This program is invoked on a cluster node, with command line arguments that
- * identify a genotype file, a phenotype file, and a genotype-ranges file that
- * determines windows or genes to be tested as groups [and other parameters
- * that I'm sure I'll add later].
- *
- * Each SNP group is tested for association with the (possibly quantitative,
- * multivariate) phenotype using the Heller-Heller-Gorfine test with a
- * Wald-sequential permutation test so that p-values at a resolution that
- * facilitates an implicit multiplicity correction.
- *
- * Details about inputs:
- * - The genotype file is in transposed plink tped format (output with plink
- *   --recode12 --transpose)
- * - The phenotype file is an ASCII file where lines are individuals and in
- *   each line there is a tab delimited list of phenotypes. There is also a
- *   header line with tab delimited phenotype names.
- *
- */
+	sorted_dx = NULL;
+	sorted_dy = NULL;
+	sorted_dz = NULL;
+	ranked_dx = NULL;
+	ranked_dy = NULL;
 
-//#define PHENO_DIST_EXTERNAL
-//#define BINARY_PHENO // make sure PHENO_DIST_EXTERNAL is undefined
+	adp = adp_l = adp_r = NULL;
+	adp_mk=adp_l_mk=adp_r_mk= NULL;
+	
 
-static void read_tped_12_snps(ifstream& ifs, int cohort_size, int nr_snps_in_range, double* x);
-static char* get_strtime(void) { time_t now = time(0); char* strtime = asctime(localtime(&now)); strtime[strlen(strtime) - 1] = '\0'; return strtime; }
-
-int main(int argc, char** argv) {
-	if (argc != 16) {
-		cerr << "Usage: " << endl;
-		cerr << argv[0] << " phenotypes_filename genotypes_filename snp_ranges_filename output_filename_prefix w_sum w_max is_sequential alpha alpha0 beta0 eps nr_perm nr_threads base_seed global_nr_snp_ranges" << endl;
-		cerr << endl;
-		cerr << "Windows debugging example:" << endl;
-		cerr << argv[0] << " \"C:\\Library\\Work with Ruth Heller\\Data\\KORA\\phenotypes_dist.txt\" \"C:\\Library\\Work with Ruth Heller\\Data\\KORA\\genotypes.chr22.tped\" \"C:\\Library\\Work with Ruth Heller\\Data\\KORA\\chr22-gene-ranges\" \"C:\\Library\\Work with Ruth Heller\\Data\\KORA\\hhg.out\" 0 2 1 0.05 0.05 0.01 0.01 100 0 0 0" << endl;
-		cerr << endl;
-		cerr << "Linux debugging example:" << endl;
-		cerr << argv[0] << " dy.txt x.tped ranges.txt out 0 2 1 0.00015 0.05 0.0000015 0.01 1000000 0 0 0" << endl;
-		cerr << endl;
-		exit(1);
+	//FIXME: this is a vicious_hack , and it needs to be redesigned. this is used in order to bring max MDS by k as part of the nr_stats framework.
+	ScoreType st = resampling_test_params.score_type;
+	if(st == UV_KS_MDS || (st == MV_KS_HHG_EXTENDED && resampling_test_params.uv_score_type == UV_KS_MDS) || st == UV_KS_XDP_MK || st == UV_IND_ADP_MK ){
+		k_stats_wanted=true;
 	}
-
-	istringstream buffer;
-
-	string executable = argv[0];
-
-	string phenotypes_filename    = argv[1];
-	string genotypes_filename     = argv[2];
-	string snp_ranges_filename    = argv[3];
-	string output_filename_prefix = argv[4];
-
-	double w_sum; 				buffer.str(argv[ 5]); buffer >> w_sum; buffer.clear();
-	double w_max; 				buffer.str(argv[ 6]); buffer >> w_max; buffer.clear();
-	bool is_sequential; 		buffer.str(argv[ 7]); buffer >> is_sequential; buffer.clear();
-	double alpha; 				buffer.str(argv[ 8]); buffer >> alpha; buffer.clear();
-	double alpha0; 				buffer.str(argv[ 9]); buffer >> alpha0; buffer.clear();
-	double beta0; 				buffer.str(argv[10]); buffer >> beta0; buffer.clear();
-	double eps; 				buffer.str(argv[11]); buffer >> eps; buffer.clear();
-	int nr_perm; 				buffer.str(argv[12]); buffer >> nr_perm; buffer.clear();
-	int nr_threads; 			buffer.str(argv[13]); buffer >> nr_threads; buffer.clear();
-	int base_seed; 				buffer.str(argv[14]); buffer >> base_seed; buffer.clear();
-	int global_nr_snp_ranges; 	buffer.str(argv[15]); buffer >> global_nr_snp_ranges; buffer.clear();
-
-	if (nr_threads <= 0) {
-		nr_threads = get_available_nr_threads();
-	}
-
-	cout << "Gene-GWAS running with the following options:" << endl << endl;
-	cout << "phenotypes_filename ...... " << phenotypes_filename << endl;
-	cout << "genotypes_filename ....... " << genotypes_filename << endl;
-	cout << "snp_ranges_filename ...... " << snp_ranges_filename << endl;
-	cout << "output_filename_prefix ... " << output_filename_prefix << endl;
-	cout << "w_sum .................... " << w_sum << endl;
-	cout << "w_max .................... " << w_max << endl;
-	cout << "is_sequential ............ " << is_sequential << endl;
-	cout << "alpha .................... " << alpha << endl;
-	cout << "alpha0 ................... " << alpha0 << endl;
-	cout << "beta0 .................... " << beta0 << endl;
-	cout << "eps ...................... " << eps << endl;
-	cout << "nr_perm .................. " << nr_perm << endl;
-	cout << "nr_threads ............... " << nr_threads << endl;
-	cout << "base_seed ................ " << base_seed << endl;
-	cout << "global_nr_snp_ranges ..... " << global_nr_snp_ranges << endl << endl;
-
-	string line;
-
-	// Open input files
-	ifstream ifs_phenotypes(phenotypes_filename.c_str());
-	if (!ifs_phenotypes.is_open()) {
-		cerr << "Could not open phenotypes file " << phenotypes_filename << " for reading." << endl;
-		exit(1);
-	}
-
-	ifstream ifs_snp_ranges(snp_ranges_filename.c_str());
-	if (!ifs_snp_ranges.is_open()) {
-		cerr << "Could not open groups file " << snp_ranges_filename << " for reading." << endl;
-		exit(1);
-	}
-
-	ifstream ifs_genotypes(genotypes_filename.c_str());
-	if (!ifs_genotypes.is_open()) {
-		cerr << "Could not open genotypes file " << genotypes_filename << " for reading." << endl;
-		exit(1);
-	}
-
-	string output_filename_observed = output_filename_prefix + "-observed.txt";
-	ofstream ofs_observed(output_filename_observed.c_str());
-	if (!ofs_observed.is_open()) {
-		cerr << "Could not open output file " << output_filename_observed << " for writing." << endl;
-		exit(1);
-	}
-	ofs_observed << "sum_chi sum_like max_chi max_like start_idx stop_idx start_pos end_pos range_name" << endl; // header
-
-	string output_filename_pvals = output_filename_prefix + "-pvals.txt";
-	ofstream ofs_pvals(output_filename_pvals.c_str());
-	if (!ofs_pvals.is_open()) {
-		cerr << "Could not open output file " << output_filename_pvals << " for writing." << endl;
-		exit(1);
-	}
-	ofs_pvals << "range nr_perms p_sum_chi p_sum_like p_max_chi p_max_like" << endl; // header
-
-	// Probe input dimensions
-	int cohort_size = -1;
-	int nr_phenotypes = -1;
-
-#ifdef PHENO_DIST_EXTERNAL
-	nr_phenotypes = 1; // will have no effect anyway
-#else
-	getline(ifs_phenotypes, line);
-	++cohort_size;
-	buffer.clear();
-	buffer.str(line);
-	string foo;
-	nr_phenotypes = 0;
-	while (buffer.good()) {
-		buffer >> foo;
-		++nr_phenotypes;
-	}
-#endif
-
-	while (ifs_phenotypes.good()) {
-		getline(ifs_phenotypes, line);
-		++cohort_size;
-#ifdef DEBUG_LIMIT_COHORT_SIZE
-		if (cohort_size == 10) {
-			break;
-		}
-#endif
-	}
-	ifs_phenotypes.clear();
-	ifs_phenotypes.seekg(0);
-
-	int nr_snp_ranges = -1;
-	while (ifs_snp_ranges.good()) {
-		getline(ifs_snp_ranges, line);
-		++nr_snp_ranges;
-#ifdef DEBUG_LIMIT_NR_RANGES
-		if (nr_snp_ranges == 10) {
-			break;
-		}
-#endif
-	}
-	ifs_snp_ranges.clear();
-	ifs_snp_ranges.seekg(0);
-
-#ifndef PHENO_DIST_EXTERNAL
-	cout << "Dataset contains " << nr_snp_ranges << " SNP ranges and " << nr_phenotypes << " phenotypes on " << cohort_size << " individuals." << endl;
-#else
-	cout << "Dataset contains " << nr_snp_ranges << " SNP ranges and an unknown number of phenotypes on " << cohort_size << " individuals." << endl;
-#endif
-
-	if (nr_snp_ranges <= 0 || cohort_size <= 0 || nr_phenotypes <= 0) {
-		cout << "Nothing to do, finishing." << endl;
-		exit(0);
-	}
-
-	double* y = new double[cohort_size * nr_phenotypes];
-	double* dy = new double[cohort_size * cohort_size];
-
-#ifdef DATAIN_DEBUG_PRINTS
-	cout << "Reading phenotypes:" << endl;
-#endif
-
-#ifdef PHENO_DIST_EXTERNAL
-	// Read precomputed phenotype distances
-	read_data_file(ifs_phenotypes, 0, 0, cohort_size, cohort_size, dy);
-#else
-	// Read the phenotypes
-	read_data_file(ifs_phenotypes, 1, 0, cohort_size, nr_phenotypes, y);
-
-	// Compute dy according to a robust Mahalanobis distance
-#ifdef BINARY_PHENO
-	compute_01_distances(cohort_size, nr_phenotypes, y, dy);
-#else
-	compute_lp_distances(cohort_size, nr_phenotypes, 2, y, dy);
-#endif
-#endif
-
-	ifs_phenotypes.close();
-
-	// For each hypothesis (i.e. SNP range)
-	// NOTE: SNP ranges are not assumed to be ordered and in any case may overlap
-
-	for (int g = 0; g < nr_snp_ranges; ++g) {
-		// Read SNP range
-		int snp1, snp2, nr_snps_in_range, start_pos, end_pos;
-		string range_name;
-		getline(ifs_snp_ranges, line);
-		istringstream iss(line);
-		iss >> snp1 >> snp2 >> start_pos >> end_pos >> range_name;
-		nr_snps_in_range = snp2 - snp1 + 1;
-
-		cout << get_strtime() << ": Working on range " << (g + 1) << " of " << nr_snp_ranges << ": " << range_name << ", SNPs " << snp1 << " to " << snp2 << endl;
-
-		double* x = new double[cohort_size * nr_snps_in_range];
-		double* dx = new double[cohort_size * cohort_size];
-
-		// Read SNPs
-		ifs_genotypes.clear();
-		ifs_genotypes.seekg(0);
-		for (int snpi = 0; snpi < snp1; ++snpi) {
-			ifs_genotypes.ignore(1024 + cohort_size * 4, '\n');
-		}
-		read_tped_12_snps(ifs_genotypes, cohort_size, nr_snps_in_range, x);
-
-		// Compute dx according to the L2 norm
-		compute_lp_distances(cohort_size, nr_snps_in_range, 2, x, dx);
-
-		// Perform the sequential test on dx and dy
-#ifdef BINARY_PHENO
-		SequentialTest seq(TWO_SAMPLE_TEST, cohort_size, nr_phenotypes, dx, dy, y, w_sum, w_max, is_sequential, alpha, alpha0, beta0, eps, nr_perm, nr_threads, base_seed, false, false);
-#else
-		SequentialTest seq(GENERAL_TEST, cohort_size, nr_phenotypes, dx, dy, y, w_sum, w_max, is_sequential, alpha, alpha0, beta0, eps, nr_perm, nr_threads, base_seed, false, false);
-#endif
-
-		double sum_chi, sum_like, max_chi, max_like, ht, edist;
-		seq.get_observed_stats(sum_chi, sum_like, max_chi, max_like, ht, edist);
-		ofs_observed << portable_double2str(sum_chi) << " " << portable_double2str(sum_like) << " "
-				<< portable_double2str(max_chi) << " " << portable_double2str(max_like) << " "
-				<< snp1 << " " << snp2 << " " << start_pos << " " << end_pos << " " << range_name << endl;
-
-		// Write p-values to output file
-		double p_sum_chi, p_sum_like, p_max_chi, p_max_like, p_ht, p_edist;
-		seq.get_pvalues(p_sum_chi, p_sum_like, p_max_chi, p_max_like, p_ht, p_edist);
-		ofs_pvals << range_name << " " << nr_perm << " " << portable_double2str(p_sum_chi) << " " << portable_double2str(p_sum_like) << " " << portable_double2str(p_max_chi) << " " << portable_double2str(p_max_like) << endl;
-
-		delete[] x;
-		delete[] dx;
-
-		if ((global_nr_snp_ranges > 0) && (p_sum_like * global_nr_snp_ranges / (g + 1) > alpha0)) {
-			cout << "FDR-like p-value threshold exceeded at nominal " << alpha0 << ", giving up on further ranges." << endl;
-			break;
-		}
-	}
-
-	ifs_genotypes.close();
-	ifs_snp_ranges.close();
-	ofs_pvals.close();
-
-	delete[] y;
-	delete[] dy;
-
-	cout << get_strtime() << ": " << argv[0] << " finished. " << endl;
-
-	return 0;
+	/* this can be used to activate the debug vector. then, one must write to it in the appropriate function, and parse it out in R.
+	if(some condition){
+		debug_vec_wanted = true;
+	}*/
+	
+	allocate_outputs(resampling_test_params);
+	preprocess(resampling_test_params);
 }
 
-static void read_tped_12_snps(ifstream& ifs, int cohort_size, int nr_snps_in_range, double* x) {
-	string line, foo;
-	int a1, a2;
+TestIO::~TestIO() {
+	// NOTE: release has to be called explicitly (it's a compromise I'm going to have to live with for now)
+}
 
-	for (int i = 0; i < nr_snps_in_range; ++i) {
-		getline(ifs, line);
-		istringstream iss(line);
-		iss >> foo >> foo >> foo >> foo;
-		for (int j = 0; j < cohort_size; ++j) {
-			iss >> a1 >> a2;
-			x[i * cohort_size + j] = a1 + a2 - 2;
+void TestIO::allocate_outputs(ResamplingTestConfigurable& resampling_test_params) {
+	
+	
+	ScoreType st = resampling_test_params.score_type;
+
+	int res_pvals_offset = 0;
+	int res_obs_stats_offest = resampling_test_params.nr_stats;
+	int res_tables_offset = resampling_test_params.nr_stats * 2;
+	int res_tables_size = 4 * xy_nrow * xy_nrow * tables_wanted;
+	int res_perm_stats_offset = res_tables_offset + res_tables_size;
+	int res_perm_stats_size = resampling_test_params.nr_stats * resampling_test_params.nr_perm * perm_stats_wanted;
+	int res_k_stats_offset = res_perm_stats_offset+res_perm_stats_size;
+	int res_k_stats_size =0;
+	
+	if(st == UV_KS_MDS){
+		res_k_stats_size =  2*(resampling_test_params.Mk_Maxk-1) * k_stats_wanted;
+	}
+	if(st == UV_KS_XDP_MK){  // then we need to return a double sized k-stats_vec for log likelihood and sum chi
+		res_k_stats_size = resampling_test_params.K * 2;
+	}
+	if(st == UV_IND_ADP_MK){
+		res_k_stats_size = resampling_test_params.adp_mk_tables_nr * 2;
+	}
+	
+	int res_debug_vec_offset = res_k_stats_offset +res_k_stats_size;
+	int res_debug_vec_size = 0;
+	
+	if(debug_vec_wanted){
+		res_debug_vec_size = DEBUG_VEC_SIZE; // currently this is hardcoded, might be changed later...
+	}
+	
+	
+	
+	int res_size = resampling_test_params.nr_stats * 2 + res_tables_size + res_perm_stats_size+res_k_stats_size+res_debug_vec_size;
+
+	PROTECT(R_output = allocMatrix(REALSXP, res_size, 1));
+	double* res = REAL(R_output);
+	
+	
+
+	obs_stats = res + res_obs_stats_offest;
+	obs_tbls = res + res_tables_offset;
+	pvals = res + res_pvals_offset;
+	perm_stats = res + res_perm_stats_offset;
+	k_stats=res+res_k_stats_offset;
+	debug_vec= res + res_debug_vec_offset;
+	
+	if(debug_vec_wanted){
+		for(int i=0;i<DEBUG_VEC_SIZE;i++){
+			debug_vec[i] = NA_REAL;
+		}
+	}
+	
+	if (tables_wanted) {
+		for (int i = 0; i < 4 * xy_nrow * xy_nrow; ++i) {
+			obs_tbls[i] = NA_REAL;
 		}
 	}
 }
 
-#endif // GWAS_INTERFACE
+void TestIO::preprocess(ResamplingTestConfigurable& resampling_test_params) {
+	ScoreType st = resampling_test_params.score_type;
 
-// Misc. utility functions
-// ============================================================================
+	if (IS_KS_TEST(st)) {
+		count_unique_y();
+	} else {
+		nr_groups = 1;
+	}
 
-// FIXME this could probably be improved, in particular made more general and accurate
+	if (st == MV_TS_HHG || st == MV_TS_EXISTING || st == MV_KS_HHG || st == MV_KS_HHG_EXTENDED || st == MV_IND_HHG_NO_TIES || st == MV_IND_HHG || st == MV_IND_HHG_EXTENDED) {
+		sort_x_distances_per_row();
+	}
 
-static int get_available_nr_threads(void) {
+	if (st == MV_IND_HHG_NO_TIES || st == MV_IND_HHG || st == MV_IND_HHG_EXTENDED) {
+		sort_y_distances_per_row();
+	}
+
+	if (IS_CI_MVZ_TEST(st)) {
+		sort_z_distances_per_row();
+	}
+
+	if (st == MV_KS_HHG_EXTENDED || st == MV_IND_HHG_EXTENDED) {
+		rank_x_distances_per_row();
+	}
+
+	if (st == MV_IND_HHG_EXTENDED) {
+		rank_y_distances_per_row();
+	}
+
+	if (st == UV_IND_ADP || st == CI_UDF_ADP_MVZ_NN) {
+		compute_adp_independence(xy_nrow, resampling_test_params.K);
+	}else if(st == UV_IND_ADP_MK){
+		compute_adp_independence_mk(xy_nrow, resampling_test_params.Mk_Maxk);
+	}else if (st == MV_IND_HHG_EXTENDED && resampling_test_params.uv_score_type == UV_IND_ADP) {
+		compute_adp_independence(xy_nrow - 1, resampling_test_params.K);
+	} else if (IS_UV_DF_KS_TEST(st) || IS_UV_DF_GOF_TEST(st)) {
+		if(st==UV_KS_XDP_MK){
+		compute_adp_k_sample_mk(xy_nrow, resampling_test_params.K);
+		}
+		else{
+		compute_adp_k_sample(xy_nrow, resampling_test_params.K);
+		}
+		
+	} else if (st == MV_KS_HHG_EXTENDED && resampling_test_params.uv_score_type == UV_KS_XDP) {
+		compute_adp_k_sample(xy_nrow - 1, resampling_test_params.K);		
+	} 
+}
+
+void TestIO::release(void) {
+	// NOTE: these deletes rely on the fact that the standard "delete" just
+	// does nothing when pointer is null
+	delete[] y_counts;
+
+	delete sorted_dx;
+	delete sorted_dy;
+	delete sorted_dz;
+
+	delete[] ranked_dx;
+	delete[] ranked_dy;
+
+	delete[] adp;
+	delete[] adp_l;
+	delete[] adp_r;
+	
+	delete[] adp_mk;
+	delete[] adp_l_mk;
+	delete[] adp_r_mk;
+	
+
+	UNPROTECT(1);
+}
+
+void TestIO::count_unique_y(void) {
+	// NOTE: this assumes y are in 0...K-1
+
+	nr_groups = 0;
+	for (int i = 0; i < xy_nrow; ++i) {
+		nr_groups = max(nr_groups, (int)(y[i]));
+	}
+	nr_groups = max(2, nr_groups + 1);
+
+	y_counts = new int[nr_groups];
+	for (int k = 0; k < nr_groups; ++k) {
+		y_counts[k] = 0;
+	}
+
+	for (int i = 0; i < xy_nrow; ++i) {
+		++y_counts[(int)(y[i])];
+	}
+}
+
+void TestIO::sort_x_distances_per_row(void) {
+	sorted_dx = new dbl_int_pair_matrix;
+	sorted_dx->resize(xy_nrow);
+
+	// This could be parallelized - trivial to do per row, but currently
+	// not necessary since we parallelize whole test calls.
+
+	for (int k = 0; k < xy_nrow; ++k) {
+		(*sorted_dx)[k].resize(xy_nrow);
+
+		for (int l = 0; l < xy_nrow; ++l) {
+			(*sorted_dx)[k][l].first = dx[l * xy_nrow + k];
+			(*sorted_dx)[k][l].second = l;
+		}
+
+		sort((*sorted_dx)[k].begin(), (*sorted_dx)[k].end(), dbl_int_pair_comparator);
+	}
+}
+
+// (no idea why this code is replicated...)
+
+void TestIO::sort_y_distances_per_row(void) {
+	sorted_dy = new dbl_int_pair_matrix;
+	sorted_dy->resize(xy_nrow);
+
+	// Could be parallelized as well
+
+	for (int k = 0; k < xy_nrow; ++k) {
+		(*sorted_dy)[k].resize(xy_nrow);
+
+		for (int l = 0; l < xy_nrow; ++l) {
+			(*sorted_dy)[k][l].first = dy[l * xy_nrow + k];
+			(*sorted_dy)[k][l].second = l;
+		}
+
+		sort((*sorted_dy)[k].begin(), (*sorted_dy)[k].end(), dbl_int_pair_comparator);
+	}
+}
+
+void TestIO::sort_z_distances_per_row(void) {
+	// NOTE: We don't actually need to sort dz, only for each row i we list
+	// any index j which is in the z-neighborhood of i.
+	// The current implementation is O(n*log(n)) per row. It can also be
+	// done in O(n*K) with K the neighborhood size, but this can be up to O(n^2)
+	// for large K. Is it doable in O(n)?
+
+	sorted_dz = new dbl_int_pair_matrix;
+	sorted_dz->resize(xy_nrow);
+
+	// Could be parallelized as well
+
+	for (int k = 0; k < xy_nrow; ++k) {
+		(*sorted_dz)[k].resize(xy_nrow);
+
+		for (int l = 0; l < xy_nrow; ++l) {
+			(*sorted_dz)[k][l].first = dz[l * xy_nrow + k];
+			(*sorted_dz)[k][l].second = l;
+		}
+
+		sort((*sorted_dz)[k].begin(), (*sorted_dz)[k].end(), dbl_int_pair_comparator);
+	}
+}
+
+// FIXME perhaps the ranking I implemented is too simplistic. What if there are tied distances?
+
+void TestIO::rank_x_distances_per_row(void) {
+	ranked_dx = new int[xy_nrow * xy_nrow]; // rank(dx) per row
+	for (int i = 0; i < xy_nrow; ++i) {
+		for (int j = 0; j < xy_nrow; ++j) {
+			ranked_dx[(*sorted_dx)[i][j].second * xy_nrow + i] = j + 1;
+		}
+	}
+}
+
+void TestIO::rank_y_distances_per_row(void) {
+	ranked_dy = new int[xy_nrow * xy_nrow]; // rank(dy) per row
+	for (int i = 0; i < xy_nrow; ++i) {
+		for (int j = 0; j < xy_nrow; ++j) {
+			ranked_dy[(*sorted_dy)[i][j].second * xy_nrow + i] = j + 1;
+		}
+	}
+}
+
+void TestIO::compute_adp_independence(int n, int K) {
+	adp   = new double[n];
+	adp_l = new double[n];
+	adp_r = new double[n];
+
+	#if 0 // partition at ranks
+	for (int xl = 1; xl <= n; ++xl) {
+		for (int xh = xl; xh <= n; ++xh) {
+			int idx = (xl - 1) * xy_nrow + xh - 1;
+
+			if (xl == 1) {
+				// left anchored interval
+				adp[idx] = my_choose(n - xh - 2 - (K - 2), K - 2);
+			} else if (xh == n) {
+				// right anchored interval
+				adp[idx] = my_choose(xl - 3 - (K - 2), K - 2);
+			} else if (xl == 2 || xh == n - 1 || K == 2) {
+				adp[idx] = 0;
+			} else if (K == 3) {
+				adp[idx] = 1;
+			} else {
+				// nondegenerate regular interval
+				adp[idx] = 0;
+				for (int i = 0; i <= K - 3; ++i) {
+					adp[idx] += my_choose(xl - 3 - i, i) * my_choose(n - xh - 2 - (K - 3 - i), K - 3 - i);
+				}
+			}
+		}
+	}
+#else
+	
+	// left anchored interval (xl == 1)
+	for (int xh = 1; xh <= n; ++xh) {
+		adp_l[xh - 1] = my_choose(n - xh - 1, K - 2); // (the xh == n case is irrelevant)
+	}
+
+	// right anchored interval (xh == n)
+	for (int xl = 1; xl <= n; ++xl) {
+		adp_r[xl - 1] = my_choose(xl - 2, K - 2); // (the xl == 1 case is irrelevant)
+	}
+
+	// nondegenerate regular interval
+	for (int xd = 0; xd < n; ++xd) {
+		adp[xd] = my_choose(n - xd - 3, K - 3); // (the xd > n - 3 case is irrelevant)
+	}
+#endif
+}
+
+void TestIO::compute_adp_independence_mk_single(int n, int K) {
+	adp   = new double[n];
+	adp_l = new double[n];
+	adp_r = new double[n];
+
+
+	double log_denom = my_lchoose(n - 1, K - 1);
+	
+	// left anchored interval (xl == 1)
+	for (int w = 1; w <= n; ++w) {
+		if (n - w - 1 < 0 || K - 2 > n - w - 1 || K - 2 <0) {
+			adp_l[w-1] = 0;
+		}else{
+		  adp_l[w-1] = exp(my_lchoose(n - w - 1, K - 2) - log_denom);
+		}
+	}
+
+	// right anchored interval (xh == n)
+	for (int w = 1; w <= n; ++w) {
+		if (n - w - 1 < 0 || K - 2 > n - w - 1 || K - 2 <0) {
+			adp_r[w-1] = 0;
+		}else{
+		  adp_r[w-1] = exp(my_lchoose(n - w - 1, K - 2) - log_denom);
+		}
+	}
+
+	// nondegenerate regular interval
+	for (int w = 1; w <= n; ++w) {
+		if (n - w - 2 < 0 || K - 3 > n - w - 2 || K - 3 <0) {
+		  adp[w-1] = 0;
+		}else{
+		  adp[w-1] = exp(my_lchoose(n - w - 2, K - 3) - log_denom);
+		}
+	}
+	
+	
+	/*
+
+	// left anchored interval (xl == 1)
+	for (int xh = 1; xh <= n; ++xh) {
+		if (n - xh - 1 <= 0 || K - 2 >n - xh - 1 || K - 2 <0) {
+			adp_l[xh - 1] = 0;
+		}else{
+		  adp_l[xh - 1] = exp(my_lchoose(n - xh - 1, K - 2) - log_denom);//my_choose(n - xh - 1, K - 2); // (the xh == n case is irrelevant)
+		}
+	}
+
+	// right anchored interval (xh == n)
+	for (int xl = 1; xl <= n; ++xl) {
+		if (xl - 2 <= 0 || K - 2 > xl - 2 || K - 2 <0) {
+			adp_r[n-xl] = 0;
+		}else{
+		  adp_r[n-xl] = exp(my_lchoose(xl - 2, K - 2) - log_denom);//my_choose(xl - 2, K - 2); // (the xl == 1 case is irrelevant)
+		}
+	}
+
+	// nondegenerate regular interval
+	for (int xd = 0; xd < n; ++xd) {
+		if (n - xd - 3 <= 0 || K - 3 > n - xd - 3 || K - 3 <0) {
+			adp[xd] = 0;
+		}else{
+		  adp[xd] = exp(my_lchoose(n - xd - 3, K - 3) - log_denom);//my_choose(n - xd - 3, K - 3); // (the xd > n - 3 case is irrelevant)
+		}
+	}
+	*/
+}
+
+void TestIO::compute_adp_k_sample(int n, int K) {
+	adp = new double[n];
+	adp_l = new double[n];
+
+	// NOTE: in this test we would like to be able to use large samples, and the involved
+	// binomial coefficients can get much larger than the DOUBLE_XMAX. We thus need to
+	// take extra care to use logarithm binomial coefficients.
+	double log_denom = lchoose(n - 1, K - 1);
+
+	// edge-anchored interval (xi == 0)
+	for (int w = 1; w < n; ++w) {
+		adp_l[w] = exp(lchoose(n - w - 1, K - 2) - log_denom);
+	}
+
+	// mid interval
+	for (int w = 1; w <= n - 3; ++w) {
+		adp[w] = exp(lchoose(n - w - 2, K - 3) - log_denom);
+	}
+}
+
+void TestIO::compute_adp_k_sample_mk(int n, int K) { //compute adp choose constants for all k up to K
+	adp_mk = new double[n*(K-1)+1];
+	adp_l_mk = new double[n*(K-1)+1];
+	
+	for (int i=0;i<K-1;i++){
+		TestIO::compute_adp_k_sample(n, i+2 ); //our nr. partitions is from 2 to K
+		for(int j=1;j<=n;j++){
+			adp_mk[i*n+j]=adp[j];
+			adp_l_mk[i*n+j]=adp_l[j];
+		}
+	}
+}
+
+
+void TestIO::compute_adp_independence_mk(int n, int K) { //compute adp choose constants for all k up to K
+	adp_mk = new double[n*(K-1)+1];
+	adp_l_mk = new double[n*(K-1)+1];
+	adp_r_mk = new double[n*(K-1)+1];
+	
+	for (int i=0;i<K-1;i++){
+		TestIO::compute_adp_independence_mk_single(n, i+2 ); //our nr. partitions is from 2 to K
+		for(int j=0;j<n;j++){
+			adp_mk[i*n+j]=adp[j];
+			adp_l_mk[i*n+j]=adp_l[j];
+			adp_r_mk[i*n+j]=adp_r[j];
+		}
+	}
+}
+
+
+
+double TestIO::my_choose(int n, int k) {
+    if (n < 0) {
+        return (0);
+    }
+	return (choose(n, k));
+}
+
+
+double TestIO::my_lchoose(int n, int k) {
+    if (n < 0) {
+        return (0);
+    }
+	if(k>n){
+		return(0);
+	}
+	if(k<0){
+		return(0);
+	}
+	return (lchoose(n, k));
+}
+
+// ResamplingTestParams
+// ================================================================================================
+
+ResamplingTestConfigurable::ResamplingTestConfigurable(ScoreType score_type, double w_sum, double w_max, double* score_params_r,
+		int nr_perm, bool is_sequential, double alpha, double alpha0, double beta0, double eps, int base_seed, int nr_threads) :
+		ScoreConfigurable(score_type, w_sum, w_max, score_params_r),
+		nr_perm(nr_perm), is_sequential(is_sequential), alpha(alpha), alpha0(alpha0), beta0(beta0), eps(eps), base_seed(base_seed), nr_threads(nr_threads)
+{
+	if (this->nr_threads == 0) {
+		this->nr_threads = get_available_nr_threads();
+	}
+
+	// NOTE: we round upward the number of permutations that the user specified,
+	// to be a multiple of the number of threads. Package R code will later
+	// discard any surplus permutations
+
+	nr_perm_per_thread = ceil(double(this->nr_perm) / this->nr_threads);
+	this->nr_perm = nr_perm_per_thread * this->nr_threads;
+}
+
+int ResamplingTestConfigurable::get_available_nr_threads(void) {
+	// This could probably be improved, in particular made more general and accurate
 #ifdef NO_THREADS
 	return (1);
 #else
@@ -675,137 +573,94 @@ static int get_available_nr_threads(void) {
 #endif
 }
 
-static void count_unique_y(int n, double* y, ExtraParams& extra_params) {
-	// NOTE: this assumes y are in 0...K-1
+// ScoreParams
+// ================================================================================================
 
-	int K = 0;
-	for (int i = 0; i < n; ++i) {
-		K = max(K, (int)(y[i]));
-	}
-	K = max(2, K + 1);
-	extra_params.K = K;
+ScoreConfigurable::ScoreConfigurable(ScoreType score_type, double w_sum, double w_max, double* extra_params_r) :
+		score_type(score_type), w_sum(w_sum), w_max(w_max)
+{
+	K = 0;
+	correct_mi_bias = false;
+	sig = 0;
+	lambda = 0;
+	Mk_Maxk=0;
+	prior_length=0;
+	prior=NULL;
+	adp_mk_tables_nr=0;
+	adp_mk_tables_m = NULL;
+	adp_mk_tables_l = NULL;
+	nnh = 0;
+	nnh_lsb = 0;
+	nnh_grid_cnt = 0;
+	nnh_grid = NULL;
+	uv_score_type = UV_GOF_WXN;
+	nr_stats = 0;
 
-	extra_params.y_counts = new int[K];
-	for (int k = 0; k < K; ++k) {
-		extra_params.y_counts[k] = 0;
-	}
-
-	for (int i = 0; i < n; ++i) {
-		++extra_params.y_counts[(int)(y[i])];
-	}
+	parse_params(score_type, extra_params_r);
 }
 
-#ifndef R_INTERFACE
-static void read_data_file(ifstream& ifs, int skp_first_lines, int skp_first_fields, int n, int m, double* buf) {
-	string line;
-	double fld;
-
-#ifdef DATAIN_DEBUG_PRINTS
-	cout << "Reading data:" << endl;
-#endif
-
-	for (int i = 0; i < skp_first_lines; ++i) {
-		getline(ifs, line);
-	}
-
-	for (int i = 0; i < n; ++i) {
-		getline(ifs, line);
-		istringstream iss(line);
-		for (int j = 0; j < skp_first_fields; ++j) {
-			iss >> fld;
-		}
-		for (int j = 0; j < m; ++j) {
-			iss >> fld;
-#ifdef DATAIN_DEBUG_PRINTS
-			cout << fld << " ";
-#endif
-			buf[j * n + i] = fld;
-		}
-#ifdef DATAIN_DEBUG_PRINTS
-		cout << endl;
-#endif
-	}
-
-	ifs.close();
+ScoreConfigurable::~ScoreConfigurable() {
+	// nothing for now
 }
 
-static void compute_01_distances(int n, int p, double* v, double *dv) {
-	for (int k = 0; k < n; ++k) {
-		for (int l = 0; l < n; ++l) {
-			bool d = false;
-			for (int j = 0; j < p; ++j) {
-				d |= (v[j * n + k] != v[j * n + l]);
+void ScoreConfigurable::parse_params(ScoreType st, double* extra_params_r) {
+	nr_stats += BASE_NR_STATS;
+
+	if (st == UV_IND_DDP || st == UV_IND_ADP) {
+		K = extra_params_r[0];
+		correct_mi_bias = extra_params_r[1];
+	} else if(st == UV_IND_ADP_MK){
+		correct_mi_bias = extra_params_r[0];
+		adp_mk_tables_nr = (int) extra_params_r[1];
+		adp_mk_tables_m = new int[adp_mk_tables_nr];
+		adp_mk_tables_l = new int[adp_mk_tables_nr];
+		int  pointer = 2;
+		for(int i=0;i<adp_mk_tables_nr;i++){
+			adp_mk_tables_m[i]=(int) extra_params_r[pointer];
+			pointer ++;
+			if(Mk_Maxk < adp_mk_tables_m[i]){
+			Mk_Maxk = adp_mk_tables_m[i];
 			}
-
-			dv[l * n + k] = d;
 		}
-	}
-}
-
-static void compute_hamming_distances(int n, int p, double* v, double *dv) {
-	for (int k = 0; k < n; ++k) {
-		for (int l = 0; l < n; ++l) {
-			int d = 0;
-			for (int j = 0; j < p; ++j) {
-				d += (v[j * n + k] != v[j * n + l]);
+		for(int i=0;i<adp_mk_tables_nr;i++){
+			adp_mk_tables_l[i]=(int) extra_params_r[pointer];
+			pointer ++;
+			if(Mk_Maxk < adp_mk_tables_l[i]){
+			Mk_Maxk = adp_mk_tables_l[i];
 			}
-
-			dv[l * n + k] = d;
 		}
-	}
-}
-
-static void compute_lp_distances(int n, int p, int norm_p, double* v, double *dv) {
-	double rcp_norm_p = 1.0 / norm_p;
-	double d;
-
-	for (int k = 0; k < n; ++k) {
-		for (int l = 0; l < n; ++l) {
-			d = 0;
-			for (int j = 0; j < p; ++j) {
-				d += pow(abs(v[j * n + k] - v[j * n + l]), norm_p);
-			}
-
-			dv[l * n + k] = pow(d, rcp_norm_p);
+	}else if (st == UV_KS_DS ||st == UV_KS_MDS ) {
+		DS_type = (int)(extra_params_r[0]);
+		lambda = extra_params_r[1];
+		Mk_Maxk=(int)( extra_params_r[2]);
+		prior_length=(int)(extra_params_r[3]);
+		prior= new double[prior_length];
+		for(int i=0;i<prior_length;i++){
+			prior[i]=extra_params_r[i+4];
 		}
-	}
-}
-
-// Robust Mahalanobis distance as suggested by Rosenbaum
-static void compute_rm_distances(int n, int p, double* v, double *dv) {
-	compute_lp_distances(n, p, 2, v, dv);
-
-	// Well, since this is kind of painful to do in C, and not a computational bottleneck
-	// I think I'll just do it in R/Matlab and load the distance matrix instead.
-
-	// TODO:
-	// for every column of v, compute ranks of the elements => r
-	// compute covariance matrix of r => cv
-	// compute variance of [1, 2, ..., n] => vuntied
-	// rat <- sqrt(vuntied/diag(cv))
-    // cv <- diag(rat) %*% cv %*% diag(rat)
-    // out <- matrix(NA, m, n - m)
-    // Xc <- X[z == 0, ]
-    // Xt <- X[z == 1, ]
-    // rownames(out) <- rownames(X)[z == 1]
-    // colnames(out) <- rownames(X)[z == 0]
-    // icov <- ginv(cv)
-    // for (i in 1:m) {
-	// 	out[i, ] <- mahalanobis(Xc, Xt[i, ], icov, inverted = T)
-	// }
-}
-
-static string portable_double2str(double x) {
-	if (isnan(x)) {
-		return "nan";
-	} else if (isinf(x)) {
-		return "inf";
-	} else {
-		ostringstream oss;
-		oss << x;
-		return oss.str();
+	} else if (st == CI_UVZ_NN || st == CI_MVZ_NN) {
+		nnh = extra_params_r[0];
+		nnh_lsb = extra_params_r[1];
+	} else if (st == CI_UVZ_GAUSSIAN || st == CI_MVZ_GAUSSIAN) {
+		sig = extra_params_r[0];
+		nnh_lsb = extra_params_r[1];
+	} else if (st == CI_UDF_ADP_MVZ_NN) {
+		K = extra_params_r[0];
+		correct_mi_bias = extra_params_r[1];
+		nnh = extra_params_r[2];
+		nnh_lsb = extra_params_r[3];
+	} else if (st == CI_MVZ_NN_GRID_BW) {
+		nnh_grid_cnt = extra_params_r[0];
+		nnh_lsb = extra_params_r[1];
+		nnh_grid = extra_params_r + 2; // NOTE: this means we assume that the parameters remain alive for the duration of the computation
+		nr_stats += BASE_NR_STATS * nnh_grid_cnt;
+	} else if (IS_UV_KS_XDP_TEST(st) || IS_UV_GOF_XDP_TEST(st)) {
+		K = extra_params_r[0];
+	} else if (st == MV_KS_HHG_EXTENDED || st == MV_IND_HHG_EXTENDED) {
+		uv_score_type = (ScoreType)(extra_params_r[0]);
+		parse_params(uv_score_type, extra_params_r + 1);
+	} else if (st == UV_GOF_EXISTING) {
+		K = 2;
 	}
 
-	return "";
 }
-#endif

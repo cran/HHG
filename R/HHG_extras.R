@@ -12,6 +12,12 @@ hhg.example.datagen = function(n, example) {
     .datagenDiamond(n)
   } else if (example == 'Circle') {
     .datagenCircle(n)
+  } else if (example == 'TwoClassUniv') {
+    .datagenTwoClassUniv(n)
+  } else if (example == 'FourClassUniv') {
+    .datagenFourClassUniv(n)
+  } else if (example == 'TwoClassMultiv') {
+    .datagenTwoClassMultiv(n)
   } else {
     stop('Unexpected example specified. Please consult the documentation.')
   }
@@ -65,3 +71,33 @@ hhg.example.datagen = function(n, example) {
   v = cos(x * pi) + rnorm(n) / 8
   return (rbind(u, v))
 }
+
+.datagenTwoClassUniv = function(n) {
+  y = as.double(runif(n) < 0.5)
+  x = y * rnorm(n, mean = -0.2) + (1 - y) * rnorm(n, mean = 0.2)
+  return (list(x = x, y = y))
+}
+
+.datagenFourClassUniv = function(n) {
+  y = as.double(sample(x = 0:3, size = n, replace = T))
+  x = (y == 1) * rnorm(n, mean = -0.4) + 
+      (y == 2) * rnorm(n, mean = -0.2) +
+      (y == 3) * rnorm(n, mean =  0.2) +
+      (y == 4) * rnorm(n, mean =  0.4)
+  return (list(x = x, y = y))
+}
+
+.datagenTwoClassMultiv = function(n) {
+  m = 10
+  x = matrix(as.double((runif(n * m) < 0.4) + (runif(n * m) < 0.4)), ncol = m)
+  y = as.double(xor(rowSums(x[, 1:5] > 0) > 2, rowSums(x[, 6:10] > 0) > 2))
+  return (list(x = x, y = y))
+}
+
+
+
+
+
+
+
+
