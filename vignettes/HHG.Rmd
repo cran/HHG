@@ -16,7 +16,7 @@ rmarkdown v1
 ---
 title: "The HHG Package - Multivariate and Univariate  non-parametric Independence and K-Sample tests"
 author: "Barak Brill, barakbri@mail.tau.ac.il"
-date: "Monday, June 14, 2015"
+date: "Monday, July 13, 2015"
 output:
   html_document:
     keep_md: yes

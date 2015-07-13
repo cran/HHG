@@ -23,6 +23,9 @@
 #include <sstream>
 #include <algorithm>
 #include <pthread.h>
+#include <R.h>
+#include <Rmath.h>
+#include <Rinternals.h>
 
 #include "HHG.h"
 
@@ -104,6 +107,7 @@ TestIO::TestIO(int xy_nrow, int y_ncol, double* dx, double* dy, double* y, bool 
 	if(st == UV_KS_MDS || (st == MV_KS_HHG_EXTENDED && resampling_test_params.uv_score_type == UV_KS_MDS) || st == UV_KS_XDP_MK || st == UV_IND_ADP_MK ){
 		k_stats_wanted=true;
 	}
+	debug_vec_wanted = false;
 	/* this can be used to activate the debug vector. then, one must write to it in the appropriate function, and parse it out in R.
 	if(some condition){
 		debug_vec_wanted = true;
@@ -143,7 +147,6 @@ void TestIO::allocate_outputs(ResamplingTestConfigurable& resampling_test_params
 	
 	int res_debug_vec_offset = res_k_stats_offset +res_k_stats_size;
 	int res_debug_vec_size = 0;
-	
 	if(debug_vec_wanted){
 		res_debug_vec_size = DEBUG_VEC_SIZE; // currently this is hardcoded, might be changed later...
 	}
@@ -207,20 +210,28 @@ void TestIO::preprocess(ResamplingTestConfigurable& resampling_test_params) {
 	}
 
 	if (st == UV_IND_ADP || st == CI_UDF_ADP_MVZ_NN) {
+		declare_adp_independence(xy_nrow, resampling_test_params.K);
 		compute_adp_independence(xy_nrow, resampling_test_params.K);
 	}else if(st == UV_IND_ADP_MK){
+		declare_adp_independence(xy_nrow, resampling_test_params.Mk_Maxk);
+		declare_adp_independence_mk(xy_nrow, resampling_test_params.Mk_Maxk);
 		compute_adp_independence_mk(xy_nrow, resampling_test_params.Mk_Maxk);
 	}else if (st == MV_IND_HHG_EXTENDED && resampling_test_params.uv_score_type == UV_IND_ADP) {
+		declare_adp_independence(xy_nrow, resampling_test_params.K);
 		compute_adp_independence(xy_nrow - 1, resampling_test_params.K);
 	} else if (IS_UV_DF_KS_TEST(st) || IS_UV_DF_GOF_TEST(st)) {
+	
 		if(st==UV_KS_XDP_MK){
-		compute_adp_k_sample_mk(xy_nrow, resampling_test_params.K);
-		}
-		else{
-		compute_adp_k_sample(xy_nrow, resampling_test_params.K);
+			declare_adp_k_sample(xy_nrow, resampling_test_params.K);
+			declare_adp_k_sample_mk(xy_nrow, resampling_test_params.K);
+			compute_adp_k_sample_mk(xy_nrow, resampling_test_params.K);
+		}else{
+			declare_adp_k_sample(xy_nrow, resampling_test_params.K);
+			compute_adp_k_sample(xy_nrow, resampling_test_params.K);
 		}
 		
 	} else if (st == MV_KS_HHG_EXTENDED && resampling_test_params.uv_score_type == UV_KS_XDP) {
+		declare_adp_k_sample(xy_nrow - 1, resampling_test_params.K);
 		compute_adp_k_sample(xy_nrow - 1, resampling_test_params.K);		
 	} 
 }
@@ -298,7 +309,7 @@ void TestIO::sort_y_distances_per_row(void) {
 	for (int k = 0; k < xy_nrow; ++k) {
 		(*sorted_dy)[k].resize(xy_nrow);
 
-		for (int l = 0; l < xy_nrow; ++l) {
+		for (int l = 0; l < xy_nrow; ++l){
 			(*sorted_dy)[k][l].first = dy[l * xy_nrow + k];
 			(*sorted_dy)[k][l].second = l;
 		}
@@ -352,9 +363,6 @@ void TestIO::rank_y_distances_per_row(void) {
 }
 
 void TestIO::compute_adp_independence(int n, int K) {
-	adp   = new double[n];
-	adp_l = new double[n];
-	adp_r = new double[n];
 
 	#if 0 // partition at ranks
 	for (int xl = 1; xl <= n; ++xl) {
@@ -400,11 +408,7 @@ void TestIO::compute_adp_independence(int n, int K) {
 }
 
 void TestIO::compute_adp_independence_mk_single(int n, int K) {
-	adp   = new double[n];
-	adp_l = new double[n];
-	adp_r = new double[n];
-
-
+	
 	double log_denom = my_lchoose(n - 1, K - 1);
 	
 	// left anchored interval (xl == 1)
@@ -433,77 +437,63 @@ void TestIO::compute_adp_independence_mk_single(int n, int K) {
 		  adp[w-1] = exp(my_lchoose(n - w - 2, K - 3) - log_denom);
 		}
 	}
-	
-	
-	/*
-
-	// left anchored interval (xl == 1)
-	for (int xh = 1; xh <= n; ++xh) {
-		if (n - xh - 1 <= 0 || K - 2 >n - xh - 1 || K - 2 <0) {
-			adp_l[xh - 1] = 0;
-		}else{
-		  adp_l[xh - 1] = exp(my_lchoose(n - xh - 1, K - 2) - log_denom);//my_choose(n - xh - 1, K - 2); // (the xh == n case is irrelevant)
-		}
-	}
-
-	// right anchored interval (xh == n)
-	for (int xl = 1; xl <= n; ++xl) {
-		if (xl - 2 <= 0 || K - 2 > xl - 2 || K - 2 <0) {
-			adp_r[n-xl] = 0;
-		}else{
-		  adp_r[n-xl] = exp(my_lchoose(xl - 2, K - 2) - log_denom);//my_choose(xl - 2, K - 2); // (the xl == 1 case is irrelevant)
-		}
-	}
-
-	// nondegenerate regular interval
-	for (int xd = 0; xd < n; ++xd) {
-		if (n - xd - 3 <= 0 || K - 3 > n - xd - 3 || K - 3 <0) {
-			adp[xd] = 0;
-		}else{
-		  adp[xd] = exp(my_lchoose(n - xd - 3, K - 3) - log_denom);//my_choose(n - xd - 3, K - 3); // (the xd > n - 3 case is irrelevant)
-		}
-	}
-	*/
 }
 
 void TestIO::compute_adp_k_sample(int n, int K) {
-	adp = new double[n];
-	adp_l = new double[n];
-
+	
 	// NOTE: in this test we would like to be able to use large samples, and the involved
 	// binomial coefficients can get much larger than the DOUBLE_XMAX. We thus need to
 	// take extra care to use logarithm binomial coefficients.
-	double log_denom = lchoose(n - 1, K - 1);
-
+	double log_denom = my_lchoose(n - 1, K - 1);
+	
 	// edge-anchored interval (xi == 0)
 	for (int w = 1; w < n; ++w) {
-		adp_l[w] = exp(lchoose(n - w - 1, K - 2) - log_denom);
+		if(n-w-1 < 0  || K-2 <0 || n- w - 1 < K-2){
+		adp_l[w] = 0;
+		}else{
+		adp_l[w] = exp(my_lchoose(n - w - 1, K - 2) - log_denom);
+		}
+		
 	}
-
+	
 	// mid interval
-	for (int w = 1; w <= n - 3; ++w) {
-		adp[w] = exp(lchoose(n - w - 2, K - 3) - log_denom);
+	for (int w = 1; w <= n - 2; ++w){
+		if( n -w -2 <0 || K - 3 < 0 || n-w-2 <K-3){
+			adp[w] = 0;
+		}else{
+			adp[w] = exp(my_lchoose(n - w - 2, K - 3) - log_denom);
+		}
+
 	}
 }
 
 void TestIO::compute_adp_k_sample_mk(int n, int K) { //compute adp choose constants for all k up to K
-	adp_mk = new double[n*(K-1)+1];
-	adp_l_mk = new double[n*(K-1)+1];
+	
+	for(int i=0; i<n*(K-1)+1;i++){
+		adp_mk[i] = 0;
+		adp_l_mk[i] = 0;
+	}
 	
 	for (int i=0;i<K-1;i++){
-		TestIO::compute_adp_k_sample(n, i+2 ); //our nr. partitions is from 2 to K
-		for(int j=1;j<=n;j++){
+		TestIO::compute_adp_k_sample(n, i+2); //our nr. partitions is from 2 to K
+		for(int j=1;j<n;j++){
 			adp_mk[i*n+j]=adp[j];
 			adp_l_mk[i*n+j]=adp_l[j];
 		}
+		
+		
 	}
 }
 
 
 void TestIO::compute_adp_independence_mk(int n, int K) { //compute adp choose constants for all k up to K
-	adp_mk = new double[n*(K-1)+1];
-	adp_l_mk = new double[n*(K-1)+1];
-	adp_r_mk = new double[n*(K-1)+1];
+	
+	
+	for(int i=0; i<n*(K-1)+1;i++){
+		adp_mk[i] = 0;
+		adp_l_mk[i] = 0;
+		adp_r_mk[i] = 0;
+	}
 	
 	for (int i=0;i<K-1;i++){
 		TestIO::compute_adp_independence_mk_single(n, i+2 ); //our nr. partitions is from 2 to K
@@ -512,8 +502,31 @@ void TestIO::compute_adp_independence_mk(int n, int K) { //compute adp choose co
 			adp_l_mk[i*n+j]=adp_l[j];
 			adp_r_mk[i*n+j]=adp_r[j];
 		}
+
 	}
 }
+
+	void TestIO::declare_adp_independence(int n,int K){
+		adp   = new double[n];
+		adp_l = new double[n];
+		adp_r = new double[n];
+	}
+	
+	void TestIO::declare_adp_independence_mk(int n,int K){
+		adp_mk = new double[n*(K-1)+1];
+		adp_l_mk = new double[n*(K-1)+1];
+		adp_r_mk = new double[n*(K-1)+1];
+	}
+	
+	void TestIO::declare_adp_k_sample(int n,int K){
+		adp = new double[n];
+		adp_l = new double[n];		
+	}
+	
+	void TestIO::declare_adp_k_sample_mk(int n,int K){
+			adp_mk = new double[n*(K-1)+1];
+			adp_l_mk = new double[n*(K-1)+1];
+	}
 
 
 

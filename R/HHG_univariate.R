@@ -1433,7 +1433,7 @@ hhg.univariate.ks.pvalue=function(statistic, NullTable,m = min(statistic$mmax,4)
   # Can make these parameter at some point
   nr.perm = 0
   total.nr.tests = 1
-  is.sequential = T
+  is.sequential = F
   alpha.hyp = NULL
   alpha0 = NULL
   beta0 = NULL
@@ -1525,7 +1525,7 @@ hhg.univariate.ks.pvalue=function(statistic, NullTable,m = min(statistic$mmax,4)
   # Can make these parameter at some point
   nr.perm = 0
   total.nr.tests = 1
-  is.sequential = T
+  is.sequential = F
   alpha.hyp = NULL
   alpha0 = NULL
   beta0 = NULL

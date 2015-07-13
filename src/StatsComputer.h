@@ -7,6 +7,9 @@
 #define STATSCOMPUTER_H_
 
 #include "HHG.h"
+#include <R.h>
+#include <Rmath.h>
+#include <Rinternals.h>
 
 class StatsComputer : public TestIO, public ScoreConfigurable {
 public:

@@ -72,8 +72,8 @@
   } else if (any(c(is.null(alpha.hyp), is.null(alpha0), is.null(beta0), is.null(eps)))) {
     stop('Either seq.total.nr.tests or all of {seq.alpha.hyp, seq.alpha0, seq.beta0, seq.eps} must be specified (i.e. be non-null).')
   }
-  
-  return (list(alpha.hyp, alpha0, beta0, eps))
+  ret = list(alpha.hyp = alpha.hyp, alpha0 = alpha0, beta0 = beta0, eps = eps)
+  return (ret)
 }
 
 # Now organize the results produced by our C implementation into a convenient R structure

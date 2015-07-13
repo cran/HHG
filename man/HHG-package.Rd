@@ -8,8 +8,8 @@
 \tabular{ll}{
 Package: \tab HHG\cr
 Type: \tab Package\cr
-Version: \tab 1.5\cr
-Date: \tab 2015-06-14\cr
+Version: \tab 1.5.1\cr
+Date: \tab 2015-07-13\cr
 License: \tab GPL-2\cr
 }
 

@@ -18,6 +18,7 @@
 #include <R.h>
 #include <Rmath.h>
 
+#include <Rinternals.h>
 #ifdef WIN32
 #include <stddef.h>
 #endif
@@ -610,7 +611,7 @@ StatsComputer::~StatsComputer() {
 
 	if (ds_ctab != NULL) {
 		for (int k = 0; k < xy_nrow + 1; ++k) {
-			delete ds_ctab[k];
+			delete[] ds_ctab[k];
 		}
 	}
 	delete[] ds_ctab;
@@ -2173,7 +2174,9 @@ void StatsComputer::ci_udf_adp_mvz_nn(void) {
 		// NOTE: see further notes under hhg_udf_adp
 		double nn_sum_chi = 0, nn_sum_like = 0;
 		double nr_nonempty_cells = 0;
-		double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+		kahan_c_chi = 0;
+		kahan_c_like = 0;
+		double kahan_t;
 
 		for (int w = 1; w <= nnh; ++w) {
 			for (int h = 1; h <= nnh; ++h) {
@@ -2373,7 +2376,9 @@ void StatsComputer::uvs_gof_xdp(void) {
 
 	double normalized_cnt;
 	double interval_o, interval_e, interval_c, interval_l;
-	double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+	kahan_c_chi = 0;
+	kahan_c_like = 0;
+	double kahan_t;
 	int xj, wmax;
 
 	for (int xi = 0; xi < n; ++xi) {
@@ -2551,7 +2556,7 @@ void StatsComputer::uvs_ks_ds(void) {
 	int len = uvs_n;
 	int dim = nr_groups;
 
-	double lpd = -lambda * log(len);  //  penalty (log of prior odds) for each additional slice
+	double lpd = -lambda * log((double)(len));  //  penalty (log of prior odds) for each additional slice
 
 	for (int k = 0; k < len + 1; ++k) {
 		for (int j = 0; j < dim; ++j) {
@@ -2987,11 +2992,13 @@ void StatsComputer::uvs_ks_xdp(void) {
 
 	double normalized_cnt;
 	double interval_o, interval_e, interval_c, interval_l;
-	double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+	kahan_c_chi = 0;
+	kahan_c_like = 0;
+	double kahan_t;
 	int xj, wmax;
 
 	for (int xi = 0; xi < n; ++xi) {
-		wmax = min(n - K - 1, n - xi);
+		wmax = n-xi;
 
 		for (int w = 1; w <= wmax; ++w) {
 			xj = xi + w;
@@ -3031,7 +3038,7 @@ void StatsComputer::uvs_ks_xdp(void) {
 
 void StatsComputer::uvs_ks_xdp_mk(void) {
 	compute_single_integral(uvs_n, uvs_xr, uvs_yr);
-
+	int perform_kahan = 0;
 	int n = uvs_n;
 	double nrmlz = 1.0 / n;
 
@@ -3049,14 +3056,16 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 
 	//double normalized_cnt;
 	double interval_o, interval_e, interval_c, interval_l,interval_xi_o;
-	double *kahan_c_chi, *kahan_c_like, kahan_t=0,temp=0;
+	double *kahan_c_chi_mk, *kahan_c_like_mk,*kahan_c_chi_mk_edge,*kahan_c_like_mk_edge, kahan_t=0,temp=0;
 	double *sum_chi_w,*sum_like_w,*sum_chi_w_edge,*sum_like_w_edge;
   
 	int wmax_limit;
 	wmax_limit= n; //wmax can't reach more than this number
 	
-	kahan_c_chi = new double[wmax_limit+1]; // note that the kahan summation in the first part reduces the error from O(n^2) to O(n), for the second part it reduces it from O(n) to O(sqrt n).
-	kahan_c_like = new double[wmax_limit+1];
+	kahan_c_chi_mk = new double[wmax_limit+1]; // note that the kahan summation in the first part reduces the error from O(n^2) to O(n), for the second part it reduces it from O(n) to O(sqrt n).
+	kahan_c_like_mk = new double[wmax_limit+1];
+	kahan_c_chi_mk_edge = new double[wmax_limit+1]; 
+	kahan_c_like_mk_edge = new double[wmax_limit+1];
 	sum_chi_w = new double[wmax_limit+1]; //for holding the sums, by w, of contribution of cells, arrays for edge and non edge cells, for chi square sums and likelihood
 	sum_like_w = new double[wmax_limit+1];
 	sum_chi_w_edge = new double[wmax_limit+1]; 
@@ -3069,8 +3078,10 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 		xdp_sl_mk[k] = 0;
 	}
 	for(int i=0;i<wmax_limit+1;i++){
-		kahan_c_chi[i] = 0;
-		kahan_c_like[i] = 0;
+		kahan_c_chi_mk[i] = 0;
+		kahan_c_like_mk[i] = 0;
+		kahan_c_chi_mk_edge[i] = 0;
+		kahan_c_like_mk_edge[i] = 0;
 		sum_chi_w[i] = 0;
 		sum_like_w[i] = 0;
 		sum_chi_w_edge[i] = 0;
@@ -3082,11 +3093,11 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 		
 		//we now do summation of interval_l, for cells of size w
 		for (int xi = 0; xi < n; ++xi) {
-			wmax = min(n - K - 1, n - xi);
+			wmax = wmax_limit - xi; // - xi;//wmax = min(n - K - 1, n - xi);
+			
 			
 			interval_xi_o = double_integral[yi        * dintegral_pn + xi]; //the observed number of counts - up to points xi, for the current group
 
-			
 			for (int w = 1; w <= wmax; ++w) { // could be slightly optimized by going over edge intervals in a separate loop from mid intervals
 					xj = xi + w;
 					
@@ -3096,17 +3107,17 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 					interval_c = ((interval_o - interval_e) * (interval_o - interval_e)) / interval_e; //note this is without the nrm.count , as shachar used to hold them (see other xdp functions).
 					interval_l = ((interval_o > 0) ? (interval_o * log(interval_o / interval_e)) : 0); //same holds for this row.
 										
-					if (xi == 0 || xj == n) {
+					if (xi == 0 || xj == n){
 						// edge interval
-						if(true){ //perform kahan
-							temp=interval_c-kahan_c_chi[w];
+						if(perform_kahan == 1){ //perform kahan
+							temp=interval_c-kahan_c_chi_mk_edge[w];
 							kahan_t = sum_chi_w_edge[w] + temp;
-							kahan_c_chi[w] = (kahan_t - sum_chi_w_edge[w]) - temp;
+							kahan_c_chi_mk_edge[w] = (kahan_t - sum_chi_w_edge[w]) - temp;
 							sum_chi_w_edge[w]=kahan_t;
 						
-							temp=interval_l-kahan_c_like[w];
+							temp=interval_l-kahan_c_like_mk_edge[w];
 							kahan_t = sum_like_w_edge[w] + temp;
-							kahan_c_like[w] = (kahan_t - sum_like_w_edge[w]) - temp;
+							kahan_c_like_mk_edge[w] = (kahan_t - sum_like_w_edge[w]) - temp;
 							sum_like_w_edge[w]=kahan_t;
 						}
 						else{
@@ -3118,15 +3129,15 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 										
 					} else {
 						//non edge interval
-						if(true){ //perform kahan
-							temp=interval_c-kahan_c_chi[w];
+						if(perform_kahan == 1){ //perform kahan
+							temp=interval_c-kahan_c_chi_mk[w];
 							kahan_t = sum_chi_w[w] + temp;
-							kahan_c_chi[w] = (kahan_t - sum_chi_w[w]) - temp;
+							kahan_c_chi_mk[w] = (kahan_t - sum_chi_w[w]) - temp;
 							sum_chi_w[w]=kahan_t;
 						
-							temp=interval_l-kahan_c_like[w];
+							temp=interval_l-kahan_c_like_mk[w];
 							kahan_t = sum_like_w[w] + temp;
-							kahan_c_like[w] = (kahan_t - sum_like_w[w]) - temp;
+							kahan_c_like_mk[w] = (kahan_t - sum_like_w[w]) - temp;
 							sum_like_w[w]=kahan_t;
 						}
 						else{
@@ -3144,51 +3155,62 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 	}
 	
 	for(int i=0;i<wmax_limit+1;i++){
-		kahan_c_chi[i] = 0;
-		kahan_c_like[i] = 0;
+		kahan_c_chi_mk[i] = 0;
+		kahan_c_like_mk[i] = 0;
 	}
 	
-	wmax = n - K - 1;
+	wmax = wmax_limit;//-1;//wmax = n - K - 1;
 	for(int k=0;k<K-1;k++){
 		for (int w = 1; w <= wmax; ++w){
-		
-			//sum over chi edge
-			temp= sum_chi_w_edge[w] * adp_l_mk[k*n+w] -kahan_c_chi[k];
-			kahan_t = xdp_sc_mk[k] + temp;
-			kahan_c_chi[k] = (kahan_t - xdp_sc_mk[k]) - temp;
-			xdp_sc_mk[k]=kahan_t;
+			if(perform_kahan ==1){
+				//sum over chi edge
+				temp= sum_chi_w_edge[w] * adp_l_mk[k*n+w] -kahan_c_chi_mk[k];
+				kahan_t = xdp_sc_mk[k] + temp;
+				kahan_c_chi_mk[k] = (kahan_t - xdp_sc_mk[k]) - temp;
+				xdp_sc_mk[k]=kahan_t;
+				
+				//sum over chi no edge
+				temp= sum_chi_w[w] * adp_mk[k*n+w] -kahan_c_chi_mk[k];
+				kahan_t = xdp_sc_mk[k] + temp;
+				kahan_c_chi_mk[k] = (kahan_t - xdp_sc_mk[k]) - temp;
+				xdp_sc_mk[k]=kahan_t;
 			
-			//sum over chi no edge
-			temp= sum_chi_w[w] * adp_mk[k*n+w] -kahan_c_chi[k];
-			kahan_t = xdp_sc_mk[k] + temp;
-			kahan_c_chi[k] = (kahan_t - xdp_sc_mk[k]) - temp;
-			xdp_sc_mk[k]=kahan_t;
-		
-			//sum over like edge
-			temp= sum_like_w_edge[w] * adp_l_mk[k*n+w] -kahan_c_like[k];
-			kahan_t = xdp_sl_mk[k] + temp;
-			kahan_c_like[k] = (kahan_t - xdp_sl_mk[k]) - temp;
-			xdp_sl_mk[k]=kahan_t;
-			
-			//sum over like no edge
-			temp= sum_like_w[w] * adp_mk[k*n+w] -kahan_c_like[k];
-			kahan_t = xdp_sl_mk[k] + temp;
-			kahan_c_like[k] = (kahan_t - xdp_sl_mk[k]) - temp;
-			xdp_sl_mk[k]=kahan_t;
-			
+				//sum over like edge
+				temp= sum_like_w_edge[w] * adp_l_mk[k*n+w] -kahan_c_like_mk[k];
+				kahan_t = xdp_sl_mk[k] + temp;
+				kahan_c_like_mk[k] = (kahan_t - xdp_sl_mk[k]) - temp;
+				xdp_sl_mk[k]=kahan_t;
+				
+				//sum over like no edge
+				temp= sum_like_w[w] * adp_mk[k*n+w] -kahan_c_like_mk[k];
+				kahan_t = xdp_sl_mk[k] + temp;
+				kahan_c_like_mk[k] = (kahan_t - xdp_sl_mk[k]) - temp;
+				xdp_sl_mk[k]=kahan_t;
+			}else{
 			//code with no kahan summation:
-			//xdp_sc_mk[k] += sum_chi_w_edge[w] * adp_l_mk[k*n+w];
-			//xdp_sl_mk[k] += sum_like_w_edge[w] * adp_l_mk[k*n+w];
+				if(adp_l_mk[k*n+w] > 0){
+					xdp_sc_mk[k] += sum_chi_w_edge[w] * adp_l_mk[k*n+w];
+					xdp_sl_mk[k] += sum_like_w_edge[w] * adp_l_mk[k*n+w];
+				}
+				
+				if(adp_mk[k*n+w] > 0){
+					xdp_sc_mk[k] += sum_chi_w[w] * adp_mk[k*n+w];
+					xdp_sl_mk[k] += sum_like_w[w] * adp_mk[k*n+w];
+				}
 			
-			//xdp_sc_mk[k] += sum_chi_w[w] * adp_mk[k*n+w];
-			//xdp_sl_mk[k] += sum_like_w[w] * adp_mk[k*n+w];
+			}
+			
+			
+			
 		}
 	}
 	
 	
 	
-	delete[] kahan_c_chi;
-	delete[] kahan_c_like;
+	delete[] kahan_c_chi_mk;
+	delete[] kahan_c_like_mk;
+	delete[] kahan_c_chi_mk_edge;
+	delete[] kahan_c_like_mk_edge;
 	delete[] sum_chi_w;
 	delete[] sum_like_w;
 	delete[] sum_chi_w_edge;
@@ -3536,7 +3558,9 @@ void StatsComputer::uvs_ind_ddp(void) {
 	int rect_o;
 	double rect_e, rect_c, rect_l, cnt;
 	double edenom = 1.0 / (n - K + 1); // I wonder if the denominator here makes sense for the degenerate partitions
-	double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+	kahan_c_chi = 0;
+	kahan_c_like = 0;
+	double	kahan_t;
 	double nr_parts = 0;
 
 	double nr_nonempty_cells = 0;
@@ -3808,7 +3832,9 @@ void StatsComputer::uvs_ind_adp(void) {
 	// While this helps stability, it may adversely affect memory locality...
 	// Maybe with the Kahan summation, this is no longer necessary?
 
-	double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+	kahan_c_chi = 0;
+	kahan_c_like = 0;
+	double kahan_t;
 
 	for (int w = 1; w <= n; ++w) {
 		for (int h = 1; h <= n; ++h) {
@@ -3899,7 +3925,9 @@ void StatsComputer::uvs_ind_adp_mk(void) {
 	// While this helps stability, it may adversely affect memory locality...
 	// Maybe with the Kahan summation, this is no longer necessary?
 
-	double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+	kahan_c_chi = 0;
+	kahan_c_like = 0;
+	double	kahan_t;
 	int current_index=0;
 	int current_cell_type=0;
 	for (int w = 1; w <= n; ++w) {

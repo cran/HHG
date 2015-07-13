@@ -226,6 +226,12 @@ protected:
 	void sort_z_distances_per_row(void);
 	void rank_x_distances_per_row(void);
 	void rank_y_distances_per_row(void);
+	
+	void declare_adp_independence(int n,int K);
+	void declare_adp_independence_mk(int n,int K);
+	void declare_adp_k_sample(int n,int K);
+	void declare_adp_k_sample_mk(int n,int K);
+	
 	void compute_adp_independence(int n, int K);
 	void compute_adp_independence_mk_single(int n, int K);
 	void compute_adp_k_sample(int n, int M);

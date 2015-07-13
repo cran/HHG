@@ -7,6 +7,9 @@
  * but maybe I'll derive and override in the future with other procedures.
  *
  */
+#include <R.h>
+#include <Rmath.h>
+#include <Rinternals.h>
 
 #ifndef SEQUENTIALTEST_H_
 #define SEQUENTIALTEST_H_
