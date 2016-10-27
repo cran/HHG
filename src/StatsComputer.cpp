@@ -51,16 +51,16 @@ StatsComputer::StatsComputer(TestIO& test_io, ScoreConfigurable& score_params,pt
 		y_perm = NULL;
 	}
 
-	if (st == MV_TS_EXISTING) {
+	if (st == MV_TS_EXISTING){
 		y0_idx = new int[y_counts[0]];
 		y1_idx = new int[y_counts[1]];
-	} else {
+	}else{
 		y0_idx = y1_idx = NULL;
 	}
 
 	idx_1_to_n = idx_perm = idx_perm_inv = NULL;
 
-	if (st == MV_IND_HHG_NO_TIES || st == MV_IND_HHG || st == MV_IND_HHG_EXTENDED || st == CI_UVZ_GAUSSIAN || st == CI_MVZ_GAUSSIAN) {
+	if (st == MV_IND_HHG_NO_TIES || st == MV_IND_HHG || st == MV_IND_HHG_EXTENDED || st == CI_UVZ_GAUSSIAN || st == CI_MVZ_GAUSSIAN || st == UV_IND_OPT_DDP2 || st == UV_IND_OPT_HOEFFDING) {
 		idx_1_to_n = new int[xy_nrow];
 		idx_perm = new int[xy_nrow];
 		idx_perm_inv = new int[xy_nrow];
@@ -95,13 +95,19 @@ StatsComputer::StatsComputer(TestIO& test_io, ScoreConfigurable& score_params,pt
 		ds_idx = new int[xy_nrow + 1];
 		ds_counts = new double[nr_groups];
 		
-		mds_max_chi_by_k=NULL;
+		mds_max_chi_by_k = NULL;
 		mds_max_loglikelihood_by_k = NULL;
 	} else if (st == UV_KS_MDS || (st == MV_KS_HHG_EXTENDED && uv_score_type == UV_KS_MDS)) {
 		ds_ctab = new int*[xy_nrow + 1];
 		for (int k = 0; k < xy_nrow + 1; ++k) {
 			ds_ctab[k] = new int[nr_groups];
 		}
+		
+		ds_ctab_bins = new int*[xy_nrow + 1];
+		for (int k = 0; k < xy_nrow + 1; ++k) {
+			ds_ctab_bins[k] = new int[nr_groups];
+		}
+		
 
 		// FIXME this is wasteful (in space and thus time), we only need half of it, really
 		ds_score = new double[(xy_nrow + 1) * (xy_nrow + 1)];
@@ -123,6 +129,7 @@ StatsComputer::StatsComputer(TestIO& test_io, ScoreConfigurable& score_params,pt
 
 
 		ds_ctab = NULL;
+		ds_ctab_bins = NULL;
 		ds_idx = NULL;
 		ds_score = ds_counts = ds_score_pearson = NULL;
 		mds_max_chi_by_k=NULL;
@@ -157,7 +164,7 @@ StatsComputer::StatsComputer(TestIO& test_io, ScoreConfigurable& score_params,pt
 	}
 	
 	
-	if (st == MV_IND_HHG_NO_TIES || st == MV_IND_HHG) {
+	if (st == MV_IND_HHG_NO_TIES || st == MV_IND_HHG || st == UV_IND_OPT_DDP2 || st == UV_IND_OPT_HOEFFDING) {
 		hhg_gen_inversion_count = new int[xy_nrow];
 		hhg_gen_source = new int[xy_nrow];
 		hhg_gen_xy_perm = new int[xy_nrow];
@@ -185,7 +192,8 @@ StatsComputer::StatsComputer(TestIO& test_io, ScoreConfigurable& score_params,pt
 			sorted_dx_gen[k].resize(xy_nrow);
 		}
 	}
-
+    
+	
 	if (st == MV_IND_HHG_EXTENDED || st == MV_KS_HHG_EXTENDED) {
 		uvs_n = xy_nrow - 1;
 		uvs_x  = new double[uvs_n]; // x distances to point i, from all other points, sorted
@@ -225,8 +233,12 @@ StatsComputer::StatsComputer(TestIO& test_io, ScoreConfigurable& score_params,pt
 		double_integral = new int[(nr_groups + 1) * dintegral_pn];
 	} else if (IS_UV_DF_IND_TEST(st)) {
 		dintegral_pn = xy_nrow + 2;
-		dintegral_zero_based_idxs = !(st == UV_IND_DDP || st == UV_IND_ADP || st == UV_IND_ADP_MK);
-		double_integral = new int[dintegral_pn * dintegral_pn];
+		dintegral_zero_based_idxs = !(st == UV_IND_DDP || st == UV_IND_ADP || st == UV_IND_ADP_MK );
+		if(st == UV_IND_ADP_MK && equipartition_type == 1){
+			double_integral = NULL; //since it is not used, and might be impossible to allocate
+		}else{
+			double_integral = new int[dintegral_pn * dintegral_pn];
+		}
 	} else if (st == MV_IND_HHG_EXTENDED && IS_UV_DF_IND_TEST(uv_score_type)) {
 		dintegral_pn = xy_nrow + 1;
 		double_integral = new int[dintegral_pn * dintegral_pn];
@@ -236,6 +248,14 @@ StatsComputer::StatsComputer(TestIO& test_io, ScoreConfigurable& score_params,pt
 	} else {
 		dintegral_pn = 0;
 		double_integral = NULL;
+	}
+	
+	if(st == UV_IND_ADP_MK && equipartition_type == 1){
+		dintegral_pn_eqp = equipartition_nr_cells_m + 1; 
+		double_integral_eqp = new int[dintegral_pn_eqp * dintegral_pn_eqp];
+	}else{
+		dintegral_pn_eqp = 0; 
+		double_integral_eqp = NULL;
 	}
 
 	if (st == UV_KS_KW || (st == MV_KS_HHG_EXTENDED && uv_score_type == UV_KS_KW)) {
@@ -531,6 +551,17 @@ StatsComputer::StatsComputer(TestIO& test_io, ScoreConfigurable& score_params,pt
 			resample = &StatsComputer::resample_mvz_ci;
 		break;
 
+		case UV_IND_OPT_DDP2:
+			compute_score = &StatsComputer::uv_ind_opt_ddp2;
+			resample = &StatsComputer::resample_dummy;
+		break;
+
+		case UV_IND_OPT_HOEFFDING:
+			compute_score = &StatsComputer::uv_ind_opt_hoeffding;
+			resample = &StatsComputer::resample_dummy;
+		break;
+
+		
 		default:
 #ifdef DEBUG_CHECKS
 			cerr << "Unexpected test type specified" << endl;
@@ -585,6 +616,7 @@ StatsComputer::~StatsComputer() {
 	delete[] y_ordered_by_x;
 
 	delete[] double_integral;
+	delete[] double_integral_eqp;
   
 	delete[] sum_chi_grid;
 	delete[] sum_like_grid;
@@ -614,7 +646,13 @@ StatsComputer::~StatsComputer() {
 			delete[] ds_ctab[k];
 		}
 	}
+	if (ds_ctab_bins != NULL) {
+		for (int k = 0; k < xy_nrow + 1; ++k) {
+			delete[] ds_ctab_bins[k];
+		}
+	}
 	delete[] ds_ctab;
+	delete[] ds_ctab_bins;
 }
 
 void StatsComputer::compute(void) {
@@ -645,7 +683,6 @@ void StatsComputer::get_stats(double* stats) {
 	stats[2] = max_chi;
 	stats[3] = max_like;
 	int offst = 4;
-
 	// NOTE: this is safe to call even if not a grid test
 	for (int i = 0; i < nnh_grid_cnt; ++i) {
 		stats[offst + 0] = sum_chi_grid [i];
@@ -2672,8 +2709,11 @@ void StatsComputer::uvs_ks_mds(void) {
 	int clpcount = 1;
 	int clumpnum = 1;
 	
+		
+	//used only in equipartition_type == 2
+	int wanted_nr_bins = equipartition_nr_cells_m;//(int)(sqrt((double)(len)));
 	
-	if(DS_type == 0 || DS_type == 1){
+	if(equipartition_type == 0 || equipartition_type == 1 || equipartition_type == 2){
 		//the regular clumping mechanism
 		for (int k = 0; k < len + 1; ++k) {
 			for (int j = 0; j < dim; ++j) {
@@ -2683,7 +2723,7 @@ void StatsComputer::uvs_ks_mds(void) {
 		
 		
 		for (int i = 0; i < len - 1; ++i) {
-			if (x[i + 1] != x[i] || DS_type == 1 ){
+			if (x[i + 1] != x[i] || equipartition_type == 1 || equipartition_type == 2){
 				ds_ctab[clumpnum][x[i]] = clpcount;
 				clpcount = 1;
 				++clumpnum;
@@ -2697,6 +2737,33 @@ void StatsComputer::uvs_ks_mds(void) {
 		for (int k = 1; k < clumpnum + 1; ++k) {
 			for (int j = 0; j < dim; ++j) {
 				ds_ctab[k][j] += ds_ctab[k - 1][j];
+			}
+		}
+	}
+	if(equipartition_type == 2 ){
+		int pointer = 0;
+		int clump_counter=0;
+		for(int i=1;i<=wanted_nr_bins;i++){
+			if(i==wanted_nr_bins){
+				pointer = len;
+			}else{
+				pointer = (int)(i * len /wanted_nr_bins);
+			}
+			for (int j = 0; j < dim; ++j){
+				ds_ctab_bins[clump_counter + 1][j] = ds_ctab[pointer][j];
+			}
+			clump_counter ++;
+		}
+		//last row is the summation of the nr obs per group
+		for (int j = 0; j < dim; ++j) { 
+				ds_ctab_bins[clump_counter + 1][j] = ds_ctab[len][j];
+		}
+		
+		
+		clumpnum = clump_counter;
+		for (int k = 1; k < clumpnum + 1; ++k){
+			for (int j = 0; j < dim; ++j){
+				ds_ctab[k][j] = ds_ctab_bins[k][j];
 			}
 		}
 	}
@@ -3054,14 +3121,21 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 	// NOTE: this uses a "between-ranks" grid, where we partition between xi and xi+1
 	// This algorithm works interval-wise rather than partition-wise.
 
-	//double normalized_cnt;
+	
 	double interval_o, interval_e, interval_c, interval_l,interval_xi_o;
 	double *kahan_c_chi_mk, *kahan_c_like_mk,*kahan_c_chi_mk_edge,*kahan_c_like_mk_edge, kahan_t=0,temp=0;
 	double *sum_chi_w,*sum_like_w,*sum_chi_w_edge,*sum_like_w_edge;
-  
+	int *ecdf_dictionary;
+	int *cell_pointers;
+	
 	int wmax_limit;
 	wmax_limit= n; //wmax can't reach more than this number
 	
+	if(equipartition_type == 0){
+		wmax_limit= n; //wmax can't reach more than this number
+	}else if(equipartition_type ==1){
+		wmax_limit= equipartition_nr_cells_m;
+	}
 	kahan_c_chi_mk = new double[wmax_limit+1]; // note that the kahan summation in the first part reduces the error from O(n^2) to O(n), for the second part it reduces it from O(n) to O(sqrt n).
 	kahan_c_like_mk = new double[wmax_limit+1];
 	kahan_c_chi_mk_edge = new double[wmax_limit+1]; 
@@ -3070,6 +3144,9 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 	sum_like_w = new double[wmax_limit+1];
 	sum_chi_w_edge = new double[wmax_limit+1]; 
 	sum_like_w_edge = new double[wmax_limit+1];
+	cell_pointers = new int[wmax_limit+1];
+	
+	ecdf_dictionary = new int[nr_groups*(wmax_limit+1)];
 	
 	int xj, wmax;
 	xj=0;
@@ -3088,26 +3165,51 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 		sum_like_w_edge[i] = 0;
 	}
 	
+	if(equipartition_type == 0){
+		for(int i=0;i<wmax_limit+1;i++){
+			cell_pointers[i]=i;
+		}
+	}else if(equipartition_type ==1){
+	
+		for(int i=0;i<wmax_limit+1;i++){
+			if(i != wmax_limit){
+				cell_pointers[i]=(int)(((double) i*n)/((double)wmax_limit)); //since wmax_limit is sqrt(n)
+			}else{
+				cell_pointers[i]=n;
+			}
+		}
+	}
+	for(int yi=0;yi< nr_groups;++yi){
+		for(int i=0;i<wmax_limit+1;i++){
+			ecdf_dictionary[yi*(wmax_limit+1)+i] = double_integral[yi        * dintegral_pn + cell_pointers[i]] ;
+		}
+	}
+	
+	int pxi;
+	int pxj;
 	
 	for (int yi = 0; yi < nr_groups; ++yi) { //for each group
 		
 		//we now do summation of interval_l, for cells of size w
-		for (int xi = 0; xi < n; ++xi) {
-			wmax = wmax_limit - xi; // - xi;//wmax = min(n - K - 1, n - xi);
+		for (int xi = 0; xi < wmax_limit; ++xi) {
+			pxi = cell_pointers[xi];
+			wmax = wmax_limit - xi;
 			
 			
-			interval_xi_o = double_integral[yi        * dintegral_pn + xi]; //the observed number of counts - up to points xi, for the current group
+			interval_xi_o = ecdf_dictionary[yi        * (wmax_limit+1) + xi]; //the observed number of counts - up to points xi, for the current group
 
 			for (int w = 1; w <= wmax; ++w) { // could be slightly optimized by going over edge intervals in a separate loop from mid intervals
 					xj = xi + w;
+					pxj = cell_pointers[xj];
 					
-					interval_o = double_integral[yi        * dintegral_pn + xj] - interval_xi_o;
 					
-					interval_e = uvs_yc[yi] * (w) * nrmlz;
+					interval_o = ecdf_dictionary[yi        * (wmax_limit+1) + xj] - interval_xi_o;
+					
+					interval_e = ((double)uvs_yc[yi]) * ((double)(pxj-pxi)) * nrmlz;
 					interval_c = ((interval_o - interval_e) * (interval_o - interval_e)) / interval_e; //note this is without the nrm.count , as shachar used to hold them (see other xdp functions).
 					interval_l = ((interval_o > 0) ? (interval_o * log(interval_o / interval_e)) : 0); //same holds for this row.
 										
-					if (xi == 0 || xj == n){
+					if (pxi == 0 || pxj == n){
 						// edge interval
 						if(perform_kahan == 1){ //perform kahan
 							temp=interval_c-kahan_c_chi_mk_edge[w];
@@ -3127,7 +3229,7 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 					
 						
 										
-					} else {
+					}else {
 						//non edge interval
 						if(perform_kahan == 1){ //perform kahan
 							temp=interval_c-kahan_c_chi_mk[w];
@@ -3164,38 +3266,38 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 		for (int w = 1; w <= wmax; ++w){
 			if(perform_kahan ==1){
 				//sum over chi edge
-				temp= sum_chi_w_edge[w] * adp_l_mk[k*n+w] -kahan_c_chi_mk[k];
+				temp= sum_chi_w_edge[w] * adp_l_mk[k*wmax+w] -kahan_c_chi_mk[k];
 				kahan_t = xdp_sc_mk[k] + temp;
 				kahan_c_chi_mk[k] = (kahan_t - xdp_sc_mk[k]) - temp;
 				xdp_sc_mk[k]=kahan_t;
 				
 				//sum over chi no edge
-				temp= sum_chi_w[w] * adp_mk[k*n+w] -kahan_c_chi_mk[k];
+				temp= sum_chi_w[w] * adp_mk[k*wmax+w] -kahan_c_chi_mk[k];
 				kahan_t = xdp_sc_mk[k] + temp;
 				kahan_c_chi_mk[k] = (kahan_t - xdp_sc_mk[k]) - temp;
 				xdp_sc_mk[k]=kahan_t;
 			
 				//sum over like edge
-				temp= sum_like_w_edge[w] * adp_l_mk[k*n+w] -kahan_c_like_mk[k];
+				temp= sum_like_w_edge[w] * adp_l_mk[k*wmax+w] -kahan_c_like_mk[k];
 				kahan_t = xdp_sl_mk[k] + temp;
 				kahan_c_like_mk[k] = (kahan_t - xdp_sl_mk[k]) - temp;
 				xdp_sl_mk[k]=kahan_t;
 				
 				//sum over like no edge
-				temp= sum_like_w[w] * adp_mk[k*n+w] -kahan_c_like_mk[k];
+				temp= sum_like_w[w] * adp_mk[k*wmax+w] -kahan_c_like_mk[k];
 				kahan_t = xdp_sl_mk[k] + temp;
 				kahan_c_like_mk[k] = (kahan_t - xdp_sl_mk[k]) - temp;
 				xdp_sl_mk[k]=kahan_t;
 			}else{
 			//code with no kahan summation:
-				if(adp_l_mk[k*n+w] > 0){
-					xdp_sc_mk[k] += sum_chi_w_edge[w] * adp_l_mk[k*n+w];
-					xdp_sl_mk[k] += sum_like_w_edge[w] * adp_l_mk[k*n+w];
+				if(adp_l_mk[k*wmax+w] > 0){
+					xdp_sc_mk[k] += sum_chi_w_edge[w] * adp_l_mk[k*wmax+w];
+					xdp_sl_mk[k] += sum_like_w_edge[w] * adp_l_mk[k*wmax+w];
 				}
 				
-				if(adp_mk[k*n+w] > 0){
-					xdp_sc_mk[k] += sum_chi_w[w] * adp_mk[k*n+w];
-					xdp_sl_mk[k] += sum_like_w[w] * adp_mk[k*n+w];
+				if(adp_mk[k*wmax+w] > 0){
+					xdp_sc_mk[k] += sum_chi_w[w] * adp_mk[k*wmax+w];
+					xdp_sl_mk[k] += sum_like_w[w] * adp_mk[k*wmax+w];
 				}
 			
 			}
@@ -3215,7 +3317,8 @@ void StatsComputer::uvs_ks_xdp_mk(void) {
 	delete[] sum_like_w;
 	delete[] sum_chi_w_edge;
 	delete[] sum_like_w_edge;
-	
+	delete[] cell_pointers;
+	delete[] ecdf_dictionary;
 	// the 1/n gets us to the MI scale
 	for(int k=0;k<K-1;k++){
 		xdp_sc_mk[k] = xdp_sc_mk[k]/n;
@@ -3886,12 +3989,10 @@ void StatsComputer::uvs_ind_adp(void) {
 
 void StatsComputer::uvs_ind_adp_mk(void) {
 ///*
-	// First, compute the double integral (padded with a leading row and column of zeros)
-	compute_double_integral(uvs_n, uvs_xr, uvs_yr);
-
-	// Now compute the score using all rectangles
-	int n = uvs_n;
-
+	int perform_kahan = 0;
+	long n = (long)uvs_n;
+	
+	
 	uvs_sc  = 0;
 	uvs_sl = 0;
 
@@ -3899,19 +4000,33 @@ void StatsComputer::uvs_ind_adp_mk(void) {
 	uvs_mc = 0;
 	uvs_ml = 0;
 
-	int rect_o, xh, yh;
+	long rect_o, xh, yh;
 	double cnt, rect_e, rect_c, rect_l,rect_o_double;
 	
-	//double edenom = 1.0 / (n - K + 1); // I wonder if the denominator here makes sense for the degenerate partitions
 	double edenom = 1.0 / n; // This makes much more sense (and is for partitions between ranks rather than at ranks)
 
+	// First, compute the double integral (padded with a leading row and column of zeros)
+
+	long wmax_limit = n;
+	if(equipartition_type == 0){
+		wmax_limit= n; //wmax can't reach more than this number
+		compute_double_integral(uvs_n, uvs_xr, uvs_yr);
+	}else if(equipartition_type ==1){
+		wmax_limit= equipartition_nr_cells_m;//(int)(sqrt((double)(n))); //wmax can't reach more than this number
+		//compute_double_integral(uvs_n, uvs_xr, uvs_yr);
+		compute_double_integral_eqp(uvs_n, uvs_xr, uvs_yr,equipartition_nr_cells_m);
+	}
+	
+	// Now compute the score using all rectangles
+
+	
 	double nr_nonempty_cells = 0;
-	int dim_size=n; //should be n 
+	long dim_size=wmax_limit+1; 
 	double* cells_likelihood_array = new double[dim_size*dim_size*9];// for holding the counts by cell type and window sizes;
 	double* cells_likelihood_kahan = new double[dim_size*dim_size*9];
 	double* cells_chisq_array = new double[dim_size*dim_size*9];
 	double* cells_chisq_kahan = new double[dim_size*dim_size*9];
-	for(int i=0;i<dim_size*dim_size*9;i++){
+	for(long i=0;i<dim_size*dim_size*9;i++){
 		cells_likelihood_array[i]=0;
 		cells_likelihood_kahan[i]=0;
 		cells_chisq_array[i]=0;
@@ -3919,32 +4034,60 @@ void StatsComputer::uvs_ind_adp_mk(void) {
 	}
 	
 	
+	long* cell_pointers = new long[wmax_limit+1];
 	
-	// It is more stable numerically to accumulate the statistics in the order
-	// of rectangle area, this is why I use the (xl, yl, w, h) enumeration.
-	// While this helps stability, it may adversely affect memory locality...
-	// Maybe with the Kahan summation, this is no longer necessary?
+	if(equipartition_type == 0){
+		for(long i=0;i<wmax_limit+1;i++){
+			cell_pointers[i]=i+1;
+		}
+		
+	}else if(equipartition_type ==1){
+	
+		for(long i=0;i<wmax_limit+1;i++){
+			if(i != wmax_limit){
+				cell_pointers[i]=(long)(((double) (i*n))/((double)wmax_limit))+1; 
+			}else{
+				cell_pointers[i]=n+1;
+			}
+		}
+	}
+	
+	
 
-	kahan_c_chi = 0;
-	kahan_c_like = 0;
-	double	kahan_t;
-	int current_index=0;
+	double kahan_c_chi = 0, kahan_c_like = 0, kahan_t;
+	long current_index=0;
 	int current_cell_type=0;
-	for (int w = 1; w <= n; ++w) {
-		for (int h = 1; h <= n; ++h) {
-			for (int xl = 1; xl <= n - w + 1 ; ++xl) { 
-				for (int yl = 1; yl <= n - h + 1 ; ++yl) { 
-					xh = xl + w -1; 
-					yh = yl + h -1; 
+	long pxl,pxh,pyl,pyh;
+	long w_actual,h_actual;
+
+	for (long w = 1; w <= wmax_limit; ++w){
+		for (long h = 1; h <= wmax_limit; ++h){
+			for (long xl = 1; xl <= wmax_limit - w + 1 ; ++xl){ 
+				pxl = cell_pointers[xl - 1];
+				for (long yl = 1; yl <= wmax_limit - h + 1 ; ++yl){ 
+					pyl = cell_pointers[yl - 1];
+										
+					xh = xl + w; 
+										
+					yh = yl + h; 
+										
+					pxh = cell_pointers[xh - 1];
+					pyh = cell_pointers[yh - 1];
 					if (true) { //was if cnt>0
-						current_cell_type = compute_adp_mk_cell_type(xl, xh, yl, yh);
+						current_cell_type = compute_adp_mk_cell_type(pxl, pxh -1 , pyl, pyh -1, uvs_n);
 						current_index = current_cell_type *dim_size*dim_size + (w-1)*dim_size +h-1;
-						rect_o = count_sample_points_in_rect(xl, xh, yl, yh);
+						if(equipartition_type == 0){
+						rect_o = count_sample_points_in_rect(pxl , pxh -1, pyl , pyh - 1); 
+						}else{ //(equipartition_type == 1) in this case
+						rect_o =  count_sample_points_in_rect_eqp(xl , xh-1 , yl , yh -1 );
+						}
 						rect_o_double = (double)rect_o;
-						rect_e = w * h * edenom;
-						rect_c = ((rect_o_double - rect_e) * (rect_o_double - rect_e)) / rect_e  - cells_chisq_kahan[current_index];
+						w_actual = (pxh - pxl);
+						h_actual = (pyh - pyl);
+						rect_e = ((double)(w_actual)) * ((double)h_actual) * edenom;
+						rect_c = ((rect_o_double - rect_e) * (rect_o_double - rect_e)) / rect_e - cells_chisq_kahan[current_index];
 						rect_l = ((rect_o_double > 0) ? (rect_o_double * log(rect_o_double / rect_e)) : 0) - cells_likelihood_kahan[current_index];
-						if(true){ //kahan summation
+						if(perform_kahan == 1){ //kahan summation
 							kahan_t = cells_chisq_array[current_index] + rect_c;
 							cells_chisq_kahan[current_index] = (kahan_t - cells_chisq_array[current_index]) - rect_c;
 							cells_chisq_array[current_index] = kahan_t;
@@ -3953,10 +4096,9 @@ void StatsComputer::uvs_ind_adp_mk(void) {
 							cells_likelihood_kahan[current_index] = (kahan_t - cells_likelihood_array[current_index]) - rect_l;
 							cells_likelihood_array[current_index] = kahan_t;
 						}else{
-							cells_chisq_array[current_index] += rect_c;
-							cells_likelihood_array[current_index] += rect_l;
+							cells_chisq_array[current_index] +=  ((rect_o_double - rect_e) * (rect_o_double - rect_e)) / rect_e;
+							cells_likelihood_array[current_index] += ((rect_o_double > 0) ? (rect_o_double * log(rect_o_double / rect_e)) : 0);
 						}
-
 						if (rect_o > 0) {
 							nr_nonempty_cells += cnt;
 						}
@@ -3965,67 +4107,61 @@ void StatsComputer::uvs_ind_adp_mk(void) {
 			}
 		}
 	}
+	
 	double current_lrt;
 	double current_chisq;
 	double current_count;
 	double current_add;
 	double normalizer;
-	
-	
+	normalizer = n; //nr_parts * n; // gets us to the MI scale
+
 	for(int k=0;k<adp_mk_tables_nr;k++){
 		current_lrt = 0;
-		current_chisq= 0;
+		current_chisq = 0;
 		kahan_c_chi = 0;
 		kahan_c_like = 0;
 		for(int cell_type=0;cell_type<9;cell_type++){
-			for (int w = 1; w <= n; w++) {
-				for (int h = 1; h <= n; h++) {
+			for (int w = 1; w <= wmax_limit; w++) {
+				for (int h = 1; h <= wmax_limit; h++) {
 						current_index = cell_type *dim_size*dim_size + (w-1)*dim_size +h-1;
-						current_count = count_adp_mk_cell_type(adp_mk_tables_m[k], adp_mk_tables_l[k], cell_type , w ,h );
+						current_count = count_adp_mk_cell_type(adp_mk_tables_m[k], adp_mk_tables_l[k], cell_type ,w ,h,wmax_limit);
 						
-						if(true && current_count>0){ //kahan summation
-						current_add = cells_chisq_array[current_index]*current_count;
+						if((perform_kahan ==1) && current_count>0){ //kahan summation
+						current_add = cells_chisq_array[current_index] * current_count;
 						
 						kahan_t = current_chisq + current_add - kahan_c_chi;
 						kahan_c_chi = (kahan_t - current_add) - current_chisq;
 						current_chisq = kahan_t;
+											
+						current_add = cells_likelihood_array[current_index] * current_count;
 						
-						
-						current_add = cells_likelihood_array[current_index]*current_count;
 						kahan_t = current_lrt + current_add - kahan_c_like;
 						kahan_c_like = (kahan_t - current_add) - current_lrt;
 						current_lrt = kahan_t;
+						
 						}else if (current_count>0){
-						current_add = cells_chisq_array[current_index]*current_count;
+						current_add = cells_chisq_array[current_index] * current_count;
 						current_chisq += current_add;
 						
-						
-						
-						current_add = cells_likelihood_array[current_index]*current_count;
+						current_add = cells_likelihood_array[current_index] * current_count;
 						current_lrt += current_add;
 						}
 						
-				}
+			}
 			}
 		}
 		
 		adp_ind_sc_mk[k] = current_chisq;
 		adp_ind_sl_mk[k] = current_lrt;
 		
-		//Deprecated
-		//nr_parts = choose(n - 1, adp_mk_tables_m[k] - 1) * choose(n - 1, adp_mk_tables_l[k] - 1);
-		
-		normalizer = n;//nr_parts * n; // gets us to the MI scale
-		
 		adp_ind_sc_mk[k] /= normalizer;
 		adp_ind_sl_mk[k] /= normalizer;
 		
 	}
-	
-	
-
+				
 #ifdef XDP_NORMALIZE
-	/*double nr_parts = choose(n - 1, K - 1); // this is actually only the sqrt of the nr parts
+	// MI bias correction with MM method is currently only available in single partition size function
+	/* double nr_parts = choose(n - 1, K - 1); // this is actually only the sqrt of the nr parts
 	nr_parts *= nr_parts;
 
 	if (correct_mi_bias) {
@@ -4045,13 +4181,12 @@ uvs_sl = -1;
 uvs_mc = -1;
 uvs_ml = -1;
 
+
 delete[] cells_likelihood_array;
 delete[] cells_likelihood_kahan;
 delete[] cells_chisq_array;
 delete[] cells_chisq_kahan;
-
-
-
+delete[] cell_pointers;
 }
 
 // Misc. helper functions
@@ -4070,6 +4205,8 @@ void StatsComputer::sort_xy_distances_per_row(void) {
 		sort(sorted_dx_gen[k].begin(), sorted_dx_gen[k].end(), dbl_dbl_int_pair_comparator_xy);
 	}
 }
+
+
 
 void StatsComputer::accumulate_2x2_contingency_table(double a00, double a01, double a10, double a11, double nrmlz, double reps) {
 	double e00, e01, e10, e11, emin00_01, emin10_11, emin, current_chi, current_like;
@@ -4251,12 +4388,51 @@ void StatsComputer::compute_double_integral(int n, double* xx, int* yy) {
 	}
 }
 
+void StatsComputer::compute_double_integral_eqp(long n, double* xx, int* yy,long nr_atoms){
+	dintegral_pn_eqp = nr_atoms+1;
+	memset(double_integral_eqp, 0, sizeof(int) * dintegral_pn_eqp * dintegral_pn_eqp);
+
+	// Populate the padded matrix with the indicator variables of whether there
+	// is a point in the set {(x_k, y_k)}_k=1^n in the grid slot (i, j) for i,j in 1,2,...,n
+	long yi;
+	long xi;
+	for (long i = 0; i < n; ++i) {
+		yi = (long)ceil(((double)(yy[i]*nr_atoms))/((double)(n))) + dintegral_zero_based_idxs;
+		xi = (long)ceil(((double)(xx[i]*nr_atoms))/((double)(n))) + dintegral_zero_based_idxs;
+		//REprintf("i: %d xi: %d yi: %d \n",i,xi,yi); //HHHHH check that inverse of atoms find is good
+		double_integral_eqp[yi * dintegral_pn_eqp + xi] += 1;
+	}
+
+	// Then run linearly and compute the integral in one row-major pass
+	long la = dintegral_pn_eqp;
+	for (long i = 1; i < dintegral_pn_eqp; ++i) {
+		long row_running_sum = 0;
+		++la;
+		for (long j = 1; j < dintegral_pn_eqp; ++j) {
+			row_running_sum += double_integral_eqp[la];
+			double_integral_eqp[la] = row_running_sum + double_integral_eqp[la - dintegral_pn_eqp];
+			//REprintf("i: %d j: %d tot: %d \n",i,j,double_integral_eqp[la]);
+			++la;
+		}
+	}
+}
+
 int StatsComputer::count_sample_points_in_rect(int xl, int xh, int yl, int yh) {
 	return (  double_integral[ yh      * dintegral_pn + xh    ]
 	        - double_integral[ yh      * dintegral_pn + xl - 1]
 	        - double_integral[(yl - 1) * dintegral_pn + xh    ]
 	        + double_integral[(yl - 1) * dintegral_pn + xl - 1]);
 }
+
+
+long StatsComputer::count_sample_points_in_rect_eqp(long xl, long xh, long yl, long yh) {
+	return (  double_integral_eqp[ yh      * dintegral_pn_eqp + xh    ]
+	        - double_integral_eqp[ yh      * dintegral_pn_eqp + xl - 1]
+	        - double_integral_eqp[(yl - 1) * dintegral_pn_eqp + xh    ]
+	        + double_integral_eqp[(yl - 1) * dintegral_pn_eqp + xl - 1]);
+}
+
+
 
 // This counts the number of data driven partitions of the data, that contain the given rectangle as a cell.
 double StatsComputer::count_ddp_with_given_cell(int xl, int xh, int yl, int yh) {
@@ -4477,13 +4653,13 @@ double StatsComputer::count_adp_with_given_cell(int xl, int xh, int yl, int yh) 
 
 
 // This counts the number of unrestricted partitions of the data.
-int StatsComputer::compute_adp_mk_cell_type(int xl, int xh, int yl, int yh) {
+int StatsComputer::compute_adp_mk_cell_type(long xl, long xh, long yl, long yh,long nr_atoms) {
 	int cx, cy;
 	int rc=-1;
 	if (xl == 1) {
 		// left anchored interval
 		cx =1;
-	} else if (xh == uvs_n) {
+	} else if (xh == nr_atoms) {
 		// right anchored interval
 		cx = 3;
 	} else {
@@ -4493,7 +4669,7 @@ int StatsComputer::compute_adp_mk_cell_type(int xl, int xh, int yl, int yh) {
 	if (yl == 1) {
 		// left anchored interval
 		cy = 1;
-	} else if (yh == uvs_n) {
+	} else if (yh == nr_atoms) {
 		// right anchored interval
 		cy = 3;
 	} else {
@@ -4523,27 +4699,27 @@ int StatsComputer::compute_adp_mk_cell_type(int xl, int xh, int yl, int yh) {
 
 }
 
-double StatsComputer::count_adp_mk_cell_type(int M,int L,int type, int w, int h) {
+double StatsComputer::count_adp_mk_cell_type(int M,int L,int type, long w, long h,long nr_atoms) {
 	double cx,cy;
 	
 	if (type == 0 || type == 3 || type ==6) {
 		// left anchored interval
-		cx = adp_l_mk[(M-2)*uvs_n + w-1];//[xh - 1];
+		cx = adp_l_mk[(M-2)*nr_atoms + w-1];//[xh - 1];
 	} else if (type == 2 || type == 5 || type ==8) {
 		// right anchored interval
-		cx = adp_r_mk[(M-2)*uvs_n + w-1];
+		cx = adp_r_mk[(M-2)*nr_atoms + w-1];
 	} else {
-		cx = adp_mk[(M-2)*uvs_n + w-1];
+		cx = adp_mk[(M-2)*nr_atoms + w-1];
 	}
 
 	if (type == 0 || type ==1 || type ==2) {
 		// left anchored interval
-		cy = adp_l_mk[(L-2)*uvs_n + h-1];
+		cy = adp_l_mk[(L-2)*nr_atoms + h-1];
 	} else if (type ==6 || type ==7 || type ==8) {
 		// right anchored interval
-		cy = adp_r_mk[(L-2)*uvs_n + h-1];
+		cy = adp_r_mk[(L-2)*nr_atoms + h-1];
 	} else {
-		cy = adp_mk[(L-2)*uvs_n + h-1];
+		cy = adp_mk[(L-2)*nr_atoms + h-1];
 	}
 	
 	return((double)cx*cy);
@@ -5051,6 +5227,280 @@ void StatsComputer::compute_tpr(int xl, int xm, int xh, int yl, int ym, int yh, 
 		uvs_ml = current_like;
 	}
 }
+
+void StatsComputer::uv_ind_opt_ddp2(void) {
+	uvs_ind_opt_ddp2();
+}
+
+void StatsComputer::uvs_ind_opt_ddp2(void) {
+	long n = xy_nrow, src;
+    long a00, a01, a10, a11;
+	long b11, b12, b21, b22;
+	long  nm1 = n-1;
+	double nm1d = (double) (n-1);
+	long xi,yi;
+	double e11, e12, e21, e22, current_chi, current_like;
+	double emin11_12, emin21_22, emin;
+	
+	sum_chi  = 0;
+	max_chi  = 0;
+	sum_like = 0;
+	max_like = 0;
+	long ng_chi=0;ng_like=0;
+	long i=0;
+	long pi = 0; // idx_perm[i];
+//#define DEBUG_PRINTS
+#ifdef DEBUG_PRINTS
+		cout << "Working on center point " << i << " (y-permuted to " << pi << ")" << endl;
+		cout << "Distances dx, dy for this row:" << endl;
+		for (int  k = 0; k < n ; ++k) {
+			cout << k << " (" << k << "): " << dx[k] << ", " << dy[k] << endl;
+		}
+		for (int k = 0; k < n ; ++k) {
+			
+			cout << k << ": " << (*sorted_dx)[i][k].first << " (" << (*sorted_dx)[i][k].second << ")" << endl;
+		}
+		for (int k = 0; k < n ; ++k) {
+			cout << k << ": " << (*sorted_dy)[pi][k].first << " (" << (*sorted_dy)[pi][k].second << ")" << endl;
+		}
+#endif
+
+		// Use Yair's merge-sort-like implementation (assumes there are no ties)
+
+		// NOTE: I am using the fact that the sorting of permuted y's is the same as
+		// the sorting of original y's. I only have to go (a) to the permuted row instead
+		// of the i'th row, and (b) pass the "sorted indices" through the permutation.
+
+		for (long j = 0; j < n ; ++j ) {
+			src = idx_perm_inv[(*sorted_dy)[pi][j].second]; // NOTE: k may be different than from the line above
+			hhg_gen_y_rev[src] = j;
+		}
+
+		for (long j = 0; j < n ; ++j){
+			src = (*sorted_dx)[i][j].second; // NOTE: k may be different than from the line above
+			hhg_gen_xy_perm[j] = hhg_gen_y_rev[src];
+			hhg_gen_source[j] = j;
+			hhg_gen_inversion_count[j] = 0;
+			hhg_gen_xy_perm_temp[j] = hhg_gen_xy_perm[j];
+		}
+
+		hhg_gen_inversions(hhg_gen_xy_perm_temp, hhg_gen_source, hhg_gen_inversion_count, n);
+
+		for (long j = 0, k = 0; j < n ; ++j, ++k) {
+			a00 = j - hhg_gen_inversion_count[j] ;
+			a01 = hhg_gen_inversion_count[j] ;
+			a10 = hhg_gen_xy_perm[j] + hhg_gen_inversion_count[j] - j ;
+			a11 = n - hhg_gen_xy_perm[j] - hhg_gen_inversion_count[j] - 1 ;
+
+			// Note that it is expected this would only be necessary for the computing the
+			// observed statistic (the permutation is identity).
+			// It might be a better idea to create a separate copy of this function
+			// and add this only in the copy.
+			
+			if(true){
+
+			    b11 =a01;
+				b12 =a11;
+				b21 =a00;
+				b22 =a10;
+				
+				xi = j;
+				yi = a00+a10;
+				#ifdef DEBUG_PRINTS
+					cout << "xi " << xi << " yi "<< yi<< endl;
+				#endif
+				
+				#ifndef XDP_ALLOW_DEGENERATE_PARTITIONS
+				// Can optimize: points with extreme ranks can be filtered beforehand...
+				if (xi == 0 || xi == nm1 || yi == 0 || yi == nm1){
+					continue;
+				}
+				#endif
+
+				e11 =        xi  * (nm1 - yi) / nm1d;
+				e12 = (nm1 - xi) * (nm1 - yi) / nm1d;
+				e21 =        xi  *        yi  / nm1d;
+				e22 = (nm1 - xi) *        yi  / nm1d;
+				//cout<< " e11 "<<e11 << 
+				emin11_12 = min(e11, e12);
+				emin21_22 = min(e21, e22);
+				emin = min(emin11_12, emin21_22);
+
+				if (emin > min_w) {
+				#ifdef XDP_ALLOW_DEGENERATE_PARTITIONS
+					current_chi = ((e11 > 0) ? ((b11 - e11) * (b11 - e11) / e11) : 0)
+								+ ((e21 > 0) ? ((b21 - e21) * (b21 - e21) / e21) : 0)
+								+ ((e12 > 0) ? ((b12 - e12) * (b12 - e12) / e12) : 0)
+								+ ((e22 > 0) ? ((b22 - e22) * (b22 - e22) / e22) : 0);
+				#else
+					current_chi = (b11 - e11) * (b11 - e11) / e11
+								+ (b21 - e21) * (b21 - e21) / e21
+								+ (b12 - e12) * (b12 - e12) / e12
+								+ (b22 - e22) * (b22 - e22) / e22;
+				#endif
+				} else {
+					current_chi = 0;
+				}
+
+				if (emin > w_sum){
+					sum_chi += current_chi;
+					++ng_chi;
+				}
+
+				if ((emin > w_max) && (current_chi > max_chi)){
+					max_chi = current_chi;
+				}
+
+				current_like = ((b11 > 0) ? ((double)(b11) * log((double)b11 / e11)) : 0)
+							 + ((b21 > 0) ? ((double)(b21) * log((double)b21 / e21)) : 0)
+							 + ((b12 > 0) ? ((double)(b12) * log((double)b12 / e12)) : 0)
+							 + ((b22 > 0) ? ((double)(b22) * log((double)b22 / e22)) : 0);
+
+				sum_like += current_like;
+				++ng_like;
+				if (current_like > max_like) {
+					max_like = current_like;
+				}
+			
+			}
+			
+			if (store_tables) {
+				//k += ((*sorted_dx)[i][k].second == i);
+				int row = i * n + (*sorted_dx)[i][k].second;
+				obs_tbls[        row] = a00;
+				obs_tbls[  n*n + row] = a01;
+				obs_tbls[2*n*n + row] = a10;
+				obs_tbls[3*n*n + row] = a11;
+			}
+
+#ifdef DEBUG_PRINTS
+			cout << "with point at position " << j << " of the sorted dx: ";
+			cout << "a00 = " << a00 << ", a01 = " << a01 << ", a10 = " << a10 << ", a11 = " << a11 << endl;
+#endif
+
+#ifdef DEBUG_CHECKS
+			if (!((a00 >= 0) && (a01 >= 0) && (a10 >= 0) && (a11 >= 0) && (a00 + a01 + a10 + a11 == n - 2))) {
+				cout << "THIS IS NOT A VALID CONTINGENCY TABLE !!!" << endl;
+				//exit(1);
+			}
+#endif
+			//accumulate_2x2_contingency_table(a00, a01, a10, a11, nrmlz, 1);
+		}
+		ng_like *=n;
+		ng_chi *=n;
+		sum_like /= ng_like;
+		sum_chi /= ng_chi;
+}
+
+void StatsComputer::uv_ind_opt_hoeffding(void) {
+	uvs_ind_opt_hoeffding();
+}
+
+void StatsComputer::uvs_ind_opt_hoeffding(void){
+	long n = xy_nrow, src;
+    long a00 ,  a10;
+	//long a01, a11;
+	//long b11, b12, b22;
+	long b21;
+    
+	//long  nm1 = n-1;
+	//double nm1d = (double) (n-1);
+	long xi,yi;
+//	double e11, e12, e21, e22;
+	
+	double hoeffding_delta;
+	sum_chi  = 0;
+	max_chi  = 0;
+	sum_like = 0;
+	max_like = 0;
+	
+	
+	long i=0;
+	long pi = 0; // idx_perm[i];
+//#define DEBUG_PRINTS
+#ifdef DEBUG_PRINTS
+		cout << "Working on center point " << i << " (y-permuted to " << pi << ")" << endl;
+		cout << "Distances dx, dy for this row:" << endl;
+		for (int  k = 0; k < n ; ++k) {
+			cout << k << " (" << k << "): " << dx[k] << ", " << dy[k] << endl;
+		}
+		for (int k = 0; k < n ; ++k) {
+			
+			cout << k << ": " << (*sorted_dx)[i][k].first << " (" << (*sorted_dx)[i][k].second << ")" << endl;
+		}
+		for (int k = 0; k < n ; ++k) {
+			cout << k << ": " << (*sorted_dy)[pi][k].first << " (" << (*sorted_dy)[pi][k].second << ")" << endl;
+		}
+#endif
+
+		// Use Yair's merge-sort-like implementation (assumes there are no ties)
+
+		// NOTE: I am using the fact that the sorting of permuted y's is the same as
+		// the sorting of original y's. I only have to go (a) to the permuted row instead
+		// of the i'th row, and (b) pass the "sorted indices" through the permutation.
+
+		for (long j = 0; j < n ; ++j ) {
+			src = idx_perm_inv[(*sorted_dy)[pi][j].second]; // NOTE: k may be different than from the line above
+			hhg_gen_y_rev[src] = j;
+		}
+
+		for (long j = 0; j < n ; ++j){
+			src = (*sorted_dx)[i][j].second; // NOTE: k may be different than from the line above
+			hhg_gen_xy_perm[j] = hhg_gen_y_rev[src];
+			hhg_gen_source[j] = j;
+			hhg_gen_inversion_count[j] = 0;
+			hhg_gen_xy_perm_temp[j] = hhg_gen_xy_perm[j];
+		}
+
+		hhg_gen_inversions(hhg_gen_xy_perm_temp, hhg_gen_source, hhg_gen_inversion_count, n);
+
+		for (long j = 0, k = 0; j < n ; ++j, ++k) {
+			a00 = j - hhg_gen_inversion_count[j] ;
+			//a01 = hhg_gen_inversion_count[j] ;
+			a10 = hhg_gen_xy_perm[j] + hhg_gen_inversion_count[j] - j ;
+			//a11 = n - hhg_gen_xy_perm[j] - hhg_gen_inversion_count[j] - 1 ;
+
+			// Note that it is expected this would only be necessary for the computing the
+			// observed statistic (the permutation is identity).
+			// It might be a better idea to create a separate copy of this function
+			// and add this only in the copy.
+			
+			//b11 =a01;
+			//b12 =a11;
+			b21 =a00;
+			//b22 =a10;
+				
+			xi = j;
+			yi = a00 + a10;
+			#ifdef DEBUG_PRINTS
+				cout << "xi " << xi << " yi "<< yi<< endl;
+			#endif
+			
+			//e11 =        xi  * (nm1 - yi) / nm1d;
+			//e12 = (nm1 - xi) * (nm1 - yi) / nm1d;
+			//e21 =        xi  *        yi  / nm1d;
+			//e22 = (nm1 - xi) *        yi  / nm1d;
+				
+			hoeffding_delta = ((double)b21 + 1.0)/n - ((double)xi + 1.0)* ((double)yi + 1.0)/ ((double)n * (double)n);
+			sum_like += hoeffding_delta * hoeffding_delta;
+			
+
+#ifdef DEBUG_PRINTS
+			cout << "with point at position " << j << " of the sorted dx: ";
+			cout << "a00 = " << a00 << ", a01 = " << a01 << ", a10 = " << a10 << ", a11 = " << a11 << endl;
+#endif
+
+#ifdef DEBUG_CHECKS
+			if (!((a00 >= 0) && (a01 >= 0) && (a10 >= 0) && (a11 >= 0) && (a00 + a01 + a10 + a11 == n - 2))) {
+				cout << "THIS IS NOT A VALID CONTINGENCY TABLE !!!" << endl;
+				//exit(1);
+			}
+#endif
+			
+		}
+		//sum_like *= (double)n;
+}
+
 
 inline int StatsComputer::my_rand(int lo, int hi) {
 	// return a random number between lo and hi inclusive.

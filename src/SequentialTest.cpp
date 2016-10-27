@@ -249,6 +249,7 @@ void SequentialTest::compute_permutations(Compute_permutations_thread_arg* carg)
 		pthread_mutex_lock(&mutex);
 
 		scs[t]->get_stats(local_perm_stats);
+		
 
 #ifdef ST_DEBUG_PRINTS
 		if (t == 0) {

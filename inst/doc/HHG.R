@@ -2,7 +2,7 @@
 set.seed(2)
 
 ## ---- eval=FALSE---------------------------------------------------------
-#  
+#  #For (N<100):
 #  N = 30
 #  data = hhg.example.datagen(N, 'Parabola')
 #  X = data[1,]
@@ -25,6 +25,26 @@ set.seed(2)
 #  hhg = hhg.test(Dx, Dy, nr.perm = 1000)
 #  
 #  hhg
+#  
+#  
+#  #For N>100, Fast.ADP.test is the reccomended option:
+#  
+#  N_Large = 1000
+#  data_Large = hhg.example.datagen(N_Large, 'W')
+#  X_Large = data_Large[1,]
+#  Y_Large = data_Large[2,]
+#  plot(X_Large,Y_Large)
+#  
+#  NullTable_for_N_Large_MXM_tables = Fast.ADP.nulltable(N_Large, variant = 'ADP-EQP',
+#  nr.atoms = 30,nr.perm=200)
+#  NullTable_for_N_Large_MXL_tables = Fast.ADP.nulltable(N_Large, variant = 'ADP-EQP-ML',
+#  nr.atoms = 30,nr.perm=200)
+#  
+#  ADP_EQP_Result = Fast.ADP.test(X_Large,Y_Large, NullTable_for_N_Large_MXM_tables)
+#  ADP_EQP_ML_Result = Fast.ADP.test(X_Large,Y_Large, NullTable_for_N_Large_MXL_tables)
+#  
+#  ADP_EQP_Result
+#  ADP_EQP_ML_Result
 #  
 
 ## ---- eval=FALSE---------------------------------------------------------
@@ -189,8 +209,6 @@ set.seed(2)
 #  
 
 ## ---- eval=FALSE---------------------------------------------------------
-#  
-#  
 #  library(parallel)
 #  library(doParallel)
 #  library(foreach)
@@ -210,16 +228,17 @@ set.seed(2)
 #  #single core worker function
 #  generate.null.distribution.statistic =function(){
 #    library(HHG)
-#    null.table = NULL
+#    null.table = matrix(NA,nrow=nr.reps.per.core,ncol = mmax-1)
 #    for(i in 1:nr.reps.per.core){
-#      #note that the statistic is distribution free (based on ranks), so creating a null table
-#      #(for the null distribution) is essentially permuting over the ranks
+#      #note that the statistic is distribution free (based on ranks),
+#      #so creating a null table (for the null distribution)
+#      #is essentially permuting over the ranks
 #      statistic = hhg.univariate.ind.stat(1:n,sample(1:n),
 #                                          variant = variant,
 #                                          aggregation.type = aggregation.type,
 #                                          score.type = score.type,
 #                                          mmax = mmax)$statistic
-#      null.table=rbind(null.table, statistic)
+#      null.table[i,]=statistic
 #    }
 #    rownames(null.table)=NULL
 #    return(null.table)
@@ -229,16 +248,16 @@ set.seed(2)
 #  cl = makeCluster(nr.cores)
 #  registerDoParallel(cl)
 #  res = foreach(core = 1:nr.cores, .combine = rbind, .packages = 'HHG',
-#                .export=c('variant','aggregation.type','score.type','mmax','nr.reps.per.core','n')) %dorng% {
-#                  generate.null.distribution.statistic()
-#                }
+#                .export=c('variant','aggregation.type','score.type',
+#                          'mmax','nr.reps.per.core','n'), .options.RNG=1234) %dorng% { generate.null.distribution.statistic() }
 #  stopCluster(cl)
 #  
 #  #the null table:
 #  head(res)
 #  
 #  #as object to be used:
-#  null.table = hhg.univariate.nulltable.from.mstats(res,minm=2, maxm = mmax,type = 'Independence',
+#  null.table = hhg.univariate.nulltable.from.mstats(res,minm=2,
+#                                                    maxm = mmax,type = 'Independence',
 #                                                    variant = variant,size = n,score.type = score.type,
 #                                                    aggregation.type = aggregation.type)
 #  
@@ -246,8 +265,7 @@ set.seed(2)
 #  x=rnorm(n)
 #  y=x+rnorm(n)
 #  ADP.test = hhg.univariate.ind.combined.test(x,y,null.table)
-#  ADP.test #results
-#  
+#  ADP.test$MinP.pvalue #pvalue
 #  
 #  
 
@@ -272,15 +290,16 @@ set.seed(2)
 #  #single core worker function
 #  generate.null.distribution.statistic =function(){
 #    library(HHG)
-#    null.table = NULL
+#    null.table = matrix(NA,nrow=nr.reps.per.core,ncol = mmax-1)
 #    for(i in 1:nr.reps.per.core){
-#      #note that the statistic is distribution free (based on ranks), so creating a null table
-#      #(for the null distribution) is essentially permuting over the ranks
+#      #note that the statistic is distribution free (based on ranks),
+#      #so creating a null table (for the null distribution)
+#      #is essentially permuting over the ranks
 #      statistic = hhg.univariate.ks.stat(1:(n1+n2),sample(c(rep(0,n1),rep(1,n2))),
-#                                          aggregation.type = aggregation.type,
-#                                          score.type = score.type,
-#                                          mmax = mmax)$statistic
-#      null.table=rbind(null.table, statistic)
+#                                         aggregation.type = aggregation.type,
+#                                         score.type = score.type,
+#                                         mmax = mmax)$statistic
+#      null.table[i,]=statistic
 #    }
 #    rownames(null.table)=NULL
 #    return(null.table)
@@ -290,16 +309,16 @@ set.seed(2)
 #  cl = makeCluster(nr.cores)
 #  registerDoParallel(cl)
 #  res = foreach(core = 1:nr.cores, .combine = rbind, .packages = 'HHG',
-#                .export=c('n1','n2','aggregation.type','score.type','mmax','nr.reps.per.core')) %dorng% {
-#                  generate.null.distribution.statistic()
-#                }
+#                .export=c('n1','n2','aggregation.type','score.type','mmax',
+#                          'nr.reps.per.core'), .options.RNG=1234) %dorng% {generate.null.distribution.statistic()}
 #  stopCluster(cl)
 #  
 #  #the null table:
 #  head(res)
 #  
 #  #as object to be used:
-#  null.table = hhg.univariate.nulltable.from.mstats(res,minm=2, maxm = mmax,type = 'KSample',
+#  null.table = hhg.univariate.nulltable.from.mstats(res,minm=2,
+#                                                    maxm = mmax,type = 'KSample',
 #                                                    variant = 'KSample-Variant',size = c(n1,n2),score.type = score.type,
 #                                                    aggregation.type = aggregation.type)
 #  
@@ -307,6 +326,247 @@ set.seed(2)
 #  x=1:(n1+n2)
 #  y=c(rep(0,n1),rep(1,n2))
 #  Sm.test = hhg.univariate.ks.combined.test(x,y,null.table)
-#  Sm.test
+#  Sm.test$MinP.pvalue #pvalue
+#  
+
+## ---- eval=FALSE---------------------------------------------------------
+#  #Option 1:
+#  # It is better to use the Fast.ADP.test, which has nr.atoms and paritition size m automatically set for large data:
+#  
+#  N_Large = 1000
+#  data_Large = hhg.example.datagen(N_Large, 'W')
+#  X_Large = data_Large[1,]
+#  Y_Large = data_Large[2,]
+#  plot(X_Large,Y_Large)
+#  
+#  NullTable_for_N_Large_MXM_tables = Fast.independence.test.nulltable(N_Large, variant = 'ADP-EQP',
+#    nr.atoms = 30,nr.perm=200)
+#  NullTable_for_N_Large_MXL_tables = Fast.independence.test.nulltable(N_Large, variant = 'ADP-EQP-ML',
+#    nr.atoms = 30,nr.perm=200)
+#  
+#  ADP_EQP_Result = Fast.independence.test(X_Large,Y_Large, NullTable_for_N_Large_MXM_tables)
+#  ADP_EQP_ML_Result = Fast.independence.test(X_Large,Y_Large, NullTable_for_N_Large_MXL_tables)
+#  
+#  ADP_EQP_Result
+#  ADP_EQP_ML_Result
+#  
+#  #null distribution depends only on data size (length(X)), so same null table can be used many times.
+#  #For example, another data set:
+#  data_Large = hhg.example.datagen(N_Large, 'Circle')
+#  X_Large = data_Large[1,]
+#  Y_Large = data_Large[2,]
+#  plot(X_Large,Y_Large)
+#  
+#  #you may use Fisher type scores:
+#  ADP_EQP_Result = Fast.independence.test(X_Large,Y_Large, NullTable_for_N_Large_MXM_tables,
+#    combining.type='Fisher')
+#  #or both MinP and Fisher:
+#  ADP_EQP_ML_Result = Fast.independence.test(X_Large,Y_Large, NullTable_for_N_Large_MXL_tables,
+#    combining.type='Both')
+#  
+#  
+#  ADP_EQP_Result
+#  ADP_EQP_ML_Result
+#  
+#  #Option 2: use the 'ADP-EQP' and 'ADP-EQP-ML' variants directly, with the combined test function (combining all partition sizes):
+#  
+#  N_Large = 1000
+#  data_Large = hhg.example.datagen(N_Large, 'W')
+#  X_Large = data_Large[1,]
+#  Y_Large = data_Large[2,]
+#  plot(X_Large,Y_Large)
+#  
+#  NullTable_for_N_Large_MXM_tables = hhg.univariate.ind.nulltable(N_Large, variant = 'ADP-EQP',
+#  nr.atoms = 30,nr.replicates=200)
+#  NullTable_for_N_Large_MXL_tables = hhg.univariate.ind.nulltable(N_Large, variant = 'ADP-EQP-ML',
+#  nr.atoms = 30,nr.replicates=200)
+#  
+#  ADP_EQP_Result = hhg.univariate.ind.combined.test(X_Large,Y_Large, NullTable_for_N_Large_MXM_tables)
+#  ADP_EQP_ML_Result = hhg.univariate.ind.combined.test(X_Large,Y_Large, NullTable_for_N_Large_MXL_tables)
+#  
+#  ADP_EQP_Result
+#  ADP_EQP_ML_Result
+#  
+#  #Option 3: perform ADP-EQP and ADP-EQP-ML for a specific partition size (M cells on x axis and L cells on y axis)
+#  
+#  
+#  ADP_EQP_result = hhg.univariate.ind.stat(X_Large,Y_Large,variant='ADP-EQP', nr.atoms =30)
+#  ADP_EQP_ML_result = hhg.univariate.ind.stat(X_Large,Y_Large,variant='ADP-EQP-ML', nr.atoms = 30)
+#  
+#  #P-value for the S_(5X5) statistic, the sum over all 5X5 partitions:
+#  hhg.univariate.ind.pvalue(ADP_EQP_result,NullTable_for_N_Large_MXM_tables,m=5 )
+#  
+#  #P-value for the S_(5X3) statistic, the sum over all 5X3 partitions:
+#  hhg.univariate.ind.pvalue(ADP_EQP_ML_result,NullTable_for_N_Large_MXL_tables,m=5,l=3)
+#  
+#  
+
+## ---- eval=FALSE---------------------------------------------------------
+#  
+#  #Option 1: performing the combined test, combining the different partitionn sizes
+#  
+#  #Two groups, each from a different normal mixture, total sample size is 10^4:
+#  X_Large = c(c(rnorm(2500,-2,0.7),rnorm(2500,2,0.7)),c(rnorm(2500,-1.5,0.5),rnorm(2500,1.5,0.5)))
+#  Y_Large = (c(rep(0,5000),rep(1,5000)))
+#  plot(Y_Large,X_Large)
+#  
+#  
+#  N0_large = 5000
+#  N1_large = 5000
+#  
+#  Sm.EQP.null.table = hhg.univariate.ks.nulltable(c(N0_large,N1_large), nr.replicates=200,
+#  variant = 'KSample-Equipartition', mmax = 30)
+#  Mm.EQP.null.table = hhg.univariate.ks.nulltable(c(N0_large,N1_large), nr.replicates=200,
+#  aggregation.type='max', variant = 'KSample-Equipartition', mmax = 30)
+#  
+#  MinPFisher.Sm.EQP.result = hhg.univariate.ks.combined.test(X_Large, Y_Large,
+#  NullTable =  Sm.EQP.null.table ,
+#    combining.type = 'Both')
+#  MinPFisher.Sm.EQP.result
+#  
+#  MinPFisher.Mm.EQP.result = hhg.univariate.ks.combined.test(X_Large, Y_Large,
+#  NullTable =  Mm.EQP.null.table ,
+#    combining.type = 'Both')
+#  MinPFisher.Mm.EQP.result
+#  
+#  #Option 2: performing the Sm or Mm test (sum or max aggregation types) for a single partition size:
+#  
+#  hhg.univariate.ks.pvalue(hhg.univariate.Sm.EQP.Likelihood.result, Sm.EQP.null.table, m=5)
+#  hhg.univariate.ks.pvalue(hhg.univariate.Mm.EQP.likelihood.result, Mm.EQP.null.table, m=5)
+#  
+#  
+
+## ---- eval=FALSE---------------------------------------------------------
+#  
+#  library(parallel)
+#  library(doParallel)
+#  library(foreach)
+#  library(doRNG)
+#  
+#  #generate an independence null table
+#  nr.cores = 4 #this is computer dependent
+#  n = 2000 #size of independence problem
+#  nr.reps.per.core = 25
+#  mmax =5
+#  score.type = 'LikelihoodRatio'
+#  aggregation.type = 'sum'
+#  variant = 'ADP-EQP-ML'
+#  nr.atoms=40 # resolution of prebinning, "atoms".
+#  #See documentation on Fast.independence.test for complete explanation
+#  
+#  #generating null table of size 4*25
+#  
+#  #single core worker function
+#  generate.null.distribution.statistic =function(){
+#    library(HHG)
+#    null.table = matrix(NA,nrow=nr.reps.per.core,ncol = (mmax-1)^2) #for ADP-EQP-ML the statistic is of dimension (mmax-1)^2, for ADP-EQP it is (mmax-1)
+#    for(i in 1:nr.reps.per.core){
+#      #note that the statistic is distribution free (based on ranks),
+#      #so creating a null table (for the null distribution)
+#      #is essentially permuting over the ranks
+#      statistic = hhg.univariate.ind.stat(1:n,sample(1:n),
+#                                          variant = variant,
+#                                          aggregation.type = aggregation.type,
+#                                          score.type = score.type,
+#                                          mmax = mmax,nr.atoms = nr.atoms)$statistic
+#      null.table[i,]=statistic
+#    }
+#    rownames(null.table)=NULL
+#    return(null.table)
+#  }
+#  
+#  #parallelize over cores
+#  cl = makeCluster(nr.cores)
+#  registerDoParallel(cl)
+#  res = foreach(core = 1:nr.cores, .combine = rbind, .packages = 'HHG',
+#                .export=c('variant','aggregation.type','score.type',
+#                          'mmax','nr.reps.per.core','n','nr.atoms'), .options.RNG=1234) %dorng% { generate.null.distribution.statistic() }
+#  stopCluster(cl)
+#  
+#  #the null table:
+#  head(res)
+#  
+#  #as object to be used:
+#  null.table = hhg.univariate.nulltable.from.mstats(res,minm=2,
+#                                                    maxm = mmax,type = 'Independence',
+#                                                    variant = variant,size = n,score.type = score.type,
+#                                                    aggregation.type = aggregation.type,nr.atoms = nr.atoms)
+#  
+#  #using the null table, checking for dependence in a linear relation
+#  x=rnorm(n)
+#  y=x+rnorm(n)
+#  ADP.test = hhg.univariate.ind.combined.test(x,y,null.table)
+#  ADP.test$MinP.pvalue #pvalue
+#  
+#  
+
+## ----eval = F------------------------------------------------------------
+#  
+#  
+#  
+#  library(parallel)
+#  library(doParallel)
+#  library(foreach)
+#  library(doRNG)
+#  
+#  #generate a k sample null table
+#  nr.cores = 4 #this is computer dependent
+#  n1 = 500 #size of first group
+#  n2 = 500 #size of first group
+#  nr.reps.per.core = 25
+#  mmax =30 #cannot exceed nr.atoms.
+#  variant = 'KSample-Equipartition'
+#  score.type = 'LikelihoodRatio'
+#  aggregation.type = 'sum'
+#  nr.atoms=40 # resolution of prebinning, "atoms".
+#  #See documentation on Fast.independence.test for complete explanation
+#  
+#  
+#  #generating null table of size 4*25
+#  
+#  #single core worker function
+#  generate.null.distribution.statistic =function(){
+#    library(HHG)
+#    null.table = matrix(NA,nrow=nr.reps.per.core,ncol = mmax-1)
+#    for(i in 1:nr.reps.per.core){
+#      #note that the statistic is distribution free (based on ranks),
+#      #so creating a null table (for the null distribution)
+#      #is essentially permuting over the ranks
+#      statistic = hhg.univariate.ks.stat(1:(n1+n2),sample(c(rep(0,n1),rep(1,n2))),
+#                                         aggregation.type = aggregation.type,
+#                                         variant = variant,
+#                                         score.type = score.type,
+#                                         mmax = mmax,
+#                                         nr.atoms = nr.atoms)$statistic
+#      null.table[i,]=statistic
+#    }
+#    rownames(null.table)=NULL
+#    return(null.table)
+#  }
+#  
+#  #parallelize over cores
+#  cl = makeCluster(nr.cores)
+#  registerDoParallel(cl)
+#  res = foreach(core = 1:nr.cores, .combine = rbind, .packages = 'HHG',
+#                .export=c('n1','n2','aggregation.type','score.type','mmax',
+#                          'nr.reps.per.core','variant','nr.atoms'), .options.RNG=1234) %dorng% {generate.null.distribution.statistic()}
+#  stopCluster(cl)
+#  
+#  #the null table:
+#  head(res)
+#  
+#  #as object to be used:
+#  null.table = hhg.univariate.nulltable.from.mstats(res,minm=2,
+#                                                    maxm = mmax,type = 'KSample',
+#                                                    variant = variant,size = c(n1,n2),score.type = score.type,
+#                                                    aggregation.type = aggregation.type,nr.atoms = nr.atoms)
+#  
+#  #using the null table, checking for dependence in a case of two distinct samples
+#  x=1:(n1+n2)
+#  y=c(rep(0,n1),rep(1,n2))
+#  Sm.test = hhg.univariate.ks.combined.test(x,y,null.table)
+#  Sm.test$MinP.pvalue #pvalue
+#  
+#  
 #  
 

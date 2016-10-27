@@ -48,6 +48,9 @@
 .UV_KS_MDS           = as.integer(44)
 .UV_KS_XDP_MK        = as.integer(45)
 .UV_IND_ADP_MK       = as.integer(46)
+.UV_IND_OPT_DDP2     = as.integer(47)
+.UV_IND_OPT_HOEFFDING= as.integer(48)
+
 
 .DEBUG_VEC_SIZE=10000
 
@@ -156,4 +159,57 @@
   return (ret)
 }
 
+
+
+xdp.ks.competitors = function(x, y, nr.perm = 0, total.nr.tests = 1,
+                              is.sequential = T, alpha.hyp = NULL, alpha0 = NULL, beta0 = NULL, eps = NULL, 
+                              nr.threads = 1) 
+{
+  # Can make these parameters at some point
+  w.max = 0
+  w.sum = 2
+  tables.wanted = F
+  perm.stats.wanted = F  
+  
+  test_type = .UV_KS_CVM_KS
+  is_sequential = as.integer(is.sequential)
+  
+  wald = .configure.wald.sequential(total.nr.tests, is.sequential, alpha.hyp, alpha0, beta0, eps)
+  alpha_hyp = as.double(wald$alpha.hyp)
+  alpha0 = as.double(wald$alpha0)
+  beta0 = as.double(wald$beta0)
+  eps = as.double(wald$eps)
+  
+  nr_perm = as.integer(nr.perm)
+  nr_threads = as.integer(nr.threads)
+  tables_wanted = as.integer(tables.wanted)
+  perm_stats_wanted = as.integer(perm.stats.wanted)
+  
+  # Dx is used to store ranks of x (a permutation of 1:n)
+  Dx = as.matrix(as.double(rank(x, ties.method = 'random')), nrow = length(x), ncol = 1)
+  
+  # y is passed as numbers in 0:(K - 1)
+  if (is.factor(y)) {
+    y = as.numeric(levels(y))[y]
+  }
+  y = as.matrix(as.double(y), nrow = length(y), ncol = 1)
+  
+  # Dy is not used
+  Dy = 0
+  
+  w_sum = as.double(w.sum)
+  w_max = as.double(w.max)
+  
+  extra_params = as.double(0)
+  
+  res = .Call('HHG_R_C', test_type, Dx, Dy, y, w_sum, w_max, extra_params, is_sequential, alpha_hyp, alpha0, beta0, eps, nr_perm, nr_threads, tables_wanted, perm_stats_wanted)
+  ret = .organize.results(res, n = nrow(Dx), nr.perm, tables.wanted, perm.stats.wanted, grid.len = 0, extra.stats.wanted = F)
+  
+  names(ret)[names(ret) == 'sum.chisq'] = 'cvm.chisq'
+  names(ret)[names(ret) == 'max.chisq'] = 'ks.chisq'
+  names(ret)[names(ret) == 'sum.lr'   ] = 'cvm.lr'
+  names(ret)[names(ret) == 'max.lr'   ] = 'ks.lr'
+  
+  return (ret)
+}
 

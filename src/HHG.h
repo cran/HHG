@@ -91,7 +91,11 @@ typedef enum {
 	//Multi Partition Versions
 	UV_KS_MDS			= 44,
 	UV_KS_XDP_MK        = 45,
-	UV_IND_ADP_MK        = 46,
+	UV_IND_ADP_MK       = 46,
+	
+	//Optimized Versions of DDP2 and hoeffding
+	UV_IND_OPT_DDP2		= 47,
+	UV_IND_OPT_HOEFFDING= 48,
 } ScoreType;
 
 // These are univariate *distribution-free* independence tests
@@ -99,7 +103,7 @@ typedef enum {
 		(tt) == UV_IND_DDP2       || (tt) == UV_IND_ADP2     || (tt) == UV_IND_DDP3_C   || \
 		(tt) == UV_IND_ADP3_C     || (tt) == UV_IND_DDP3     || (tt) == UV_IND_ADP3     || \
 		(tt) == UV_IND_DDP4       || (tt) == UV_IND_ADP4     || (tt) == UV_IND_DDP      || \
-		(tt) == UV_IND_ADP        || (tt) == UV_IND_ADP_MK)
+		(tt) == UV_IND_ADP        || (tt) == UV_IND_ADP_MK   )
 
 // These are univariate *distribution-free* K-sample tests
 #define IS_UV_DF_KS_TEST(tt) ((tt) == UV_KS_XDP2 || (tt) == UV_KS_XDP3 || (tt) == UV_KS_XDP || (tt) == UV_KS_XDP_MK)
@@ -146,7 +150,8 @@ struct ScoreConfigurable {
 	bool correct_mi_bias;
 	double sig;
 	double lambda; //lambda and Mk_Maxk are three parameters used for the ds, mds functions.
-	int DS_type;
+	int equipartition_type; // type of equipartition to perform (for MDS, 0 is none ,1 is no clumps, 2 is placemints in m bins) (for XDP KS, 0 for none , 1 for  m bins)
+	int equipartition_nr_cells_m;
 	int Mk_Maxk;
 	int adp_mk_tables_nr;
 	int* adp_mk_tables_m;
@@ -204,6 +209,9 @@ struct TestIO {
 	double *adp_mk, *adp_l_mk, *adp_r_mk; 
 	
 	
+	int is_equipartition;
+	int equipartition_m_nr_bins;
+	int choose_nr_atoms;
 	//
 	// Outputs
 	//
@@ -216,7 +224,7 @@ struct TestIO {
 	SEXP R_output;
 	double *obs_stats, *obs_tbls, *pvals, *perm_stats,*k_stats,*debug_vec;
 	const static int DEBUG_VEC_SIZE=10000; //could be changed later;
-protected:
+	protected:
 	void allocate_outputs(ResamplingTestConfigurable& score_params);
 	void preprocess(ResamplingTestConfigurable& score_params);
 	void count_unique_y(void);
@@ -226,6 +234,9 @@ protected:
 	void sort_z_distances_per_row(void);
 	void rank_x_distances_per_row(void);
 	void rank_y_distances_per_row(void);
+	
+	void sort_x_distances_opt(void);
+	void sort_y_distances_opt(void);
 	
 	void declare_adp_independence(int n,int K);
 	void declare_adp_independence_mk(int n,int K);

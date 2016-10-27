@@ -1,9 +1,9 @@
 //============================================================================
 // Name        : HHG.cpp
-// Author      : Shachar Kaufman
-// Version     :
+// Author      : Barak Brill &Shachar Kaufman
+// Version     : 1.6
 // Copyright   : TAU
-// Description : An implementation of the Heller-Heller-Gorfine test
+// Description : An implementation of the Heller-Heller-Gorfine test, ADP and DDP tests and the ADP k-sample variant
 //============================================================================
 
 #ifdef WIN32
@@ -108,10 +108,10 @@ TestIO::TestIO(int xy_nrow, int y_ncol, double* dx, double* dy, double* y, bool 
 		k_stats_wanted=true;
 	}
 	debug_vec_wanted = false;
-	/* this can be used to activate the debug vector. then, one must write to it in the appropriate function, and parse it out in R.
-	if(some condition){
+	// this can be used to activate the debug vector. then, one must write to it in the appropriate function, and parse it out in R.
+	if(false){
 		debug_vec_wanted = true;
-	}*/
+	}
 	
 	allocate_outputs(resampling_test_params);
 	preprocess(resampling_test_params);
@@ -122,7 +122,6 @@ TestIO::~TestIO() {
 }
 
 void TestIO::allocate_outputs(ResamplingTestConfigurable& resampling_test_params) {
-	
 	
 	ScoreType st = resampling_test_params.score_type;
 
@@ -189,7 +188,7 @@ void TestIO::preprocess(ResamplingTestConfigurable& resampling_test_params) {
 		nr_groups = 1;
 	}
 
-	if (st == MV_TS_HHG || st == MV_TS_EXISTING || st == MV_KS_HHG || st == MV_KS_HHG_EXTENDED || st == MV_IND_HHG_NO_TIES || st == MV_IND_HHG || st == MV_IND_HHG_EXTENDED) {
+	if (st == MV_TS_HHG || st == MV_TS_EXISTING || st == MV_KS_HHG || st == MV_KS_HHG_EXTENDED || st == MV_IND_HHG_NO_TIES || st == MV_IND_HHG || st == MV_IND_HHG_EXTENDED ) {
 		sort_x_distances_per_row();
 	}
 
@@ -208,23 +207,42 @@ void TestIO::preprocess(ResamplingTestConfigurable& resampling_test_params) {
 	if (st == MV_IND_HHG_EXTENDED) {
 		rank_y_distances_per_row();
 	}
+	
+	if(st == UV_IND_OPT_DDP2 || st == UV_IND_OPT_HOEFFDING){
+		sort_x_distances_opt();
+		sort_y_distances_opt();
+	}
 
 	if (st == UV_IND_ADP || st == CI_UDF_ADP_MVZ_NN) {
 		declare_adp_independence(xy_nrow, resampling_test_params.K);
 		compute_adp_independence(xy_nrow, resampling_test_params.K);
 	}else if(st == UV_IND_ADP_MK){
-		declare_adp_independence(xy_nrow, resampling_test_params.Mk_Maxk);
-		declare_adp_independence_mk(xy_nrow, resampling_test_params.Mk_Maxk);
-		compute_adp_independence_mk(xy_nrow, resampling_test_params.Mk_Maxk);
+		is_equipartition = resampling_test_params.equipartition_type;
+		equipartition_m_nr_bins = resampling_test_params.equipartition_nr_cells_m;
+		if(is_equipartition ==1){
+			choose_nr_atoms = equipartition_m_nr_bins;
+		}else{
+			choose_nr_atoms = xy_nrow;
+		}
+		declare_adp_independence(choose_nr_atoms, resampling_test_params.Mk_Maxk);
+		declare_adp_independence_mk(choose_nr_atoms, resampling_test_params.Mk_Maxk);
+		compute_adp_independence_mk(choose_nr_atoms, resampling_test_params.Mk_Maxk);
 	}else if (st == MV_IND_HHG_EXTENDED && resampling_test_params.uv_score_type == UV_IND_ADP) {
 		declare_adp_independence(xy_nrow, resampling_test_params.K);
 		compute_adp_independence(xy_nrow - 1, resampling_test_params.K);
 	} else if (IS_UV_DF_KS_TEST(st) || IS_UV_DF_GOF_TEST(st)) {
 	
 		if(st==UV_KS_XDP_MK){
-			declare_adp_k_sample(xy_nrow, resampling_test_params.K);
-			declare_adp_k_sample_mk(xy_nrow, resampling_test_params.K);
-			compute_adp_k_sample_mk(xy_nrow, resampling_test_params.K);
+			is_equipartition = resampling_test_params.equipartition_type;
+			equipartition_m_nr_bins = resampling_test_params.equipartition_nr_cells_m;
+			if(is_equipartition ==1){
+				choose_nr_atoms = equipartition_m_nr_bins;
+			}else{
+				choose_nr_atoms = xy_nrow;
+			}
+			declare_adp_k_sample(choose_nr_atoms, resampling_test_params.K);
+			declare_adp_k_sample_mk(choose_nr_atoms, resampling_test_params.K);
+			compute_adp_k_sample_mk(choose_nr_atoms, resampling_test_params.K);
 		}else{
 			declare_adp_k_sample(xy_nrow, resampling_test_params.K);
 			compute_adp_k_sample(xy_nrow, resampling_test_params.K);
@@ -277,6 +295,41 @@ void TestIO::count_unique_y(void) {
 	for (int i = 0; i < xy_nrow; ++i) {
 		++y_counts[(int)(y[i])];
 	}
+}
+
+
+void TestIO::sort_x_distances_opt(void){
+	sorted_dx = new dbl_int_pair_matrix;
+	sorted_dx->resize(1);
+
+	int k=0;
+	(*sorted_dx)[k].resize(xy_nrow);
+
+	for (int l = 0; l < xy_nrow; ++l) {
+		(*sorted_dx)[k][l].first = dx[l];
+		(*sorted_dx)[k][l].second = l;
+	}
+
+	sort((*sorted_dx)[k].begin(), (*sorted_dx)[k].end(), dbl_int_pair_comparator);
+	
+}
+
+void TestIO::sort_y_distances_opt(void){
+	sorted_dy = new dbl_int_pair_matrix;
+	sorted_dy->resize(1);
+
+	// Could be parallelized as well
+
+	int k=0;
+	(*sorted_dy)[k].resize(xy_nrow);
+
+	for (int l = 0; l < xy_nrow; ++l){
+		(*sorted_dy)[k][l].first = dy[l];
+		(*sorted_dy)[k][l].second = l;
+	}
+
+	sort((*sorted_dy)[k].begin(), (*sorted_dy)[k].end(), dbl_int_pair_comparator);
+	
 }
 
 void TestIO::sort_x_distances_per_row(void) {
@@ -465,6 +518,7 @@ void TestIO::compute_adp_k_sample(int n, int K) {
 		}
 
 	}
+	
 }
 
 void TestIO::compute_adp_k_sample_mk(int n, int K) { //compute adp choose constants for all k up to K
@@ -497,7 +551,7 @@ void TestIO::compute_adp_independence_mk(int n, int K) { //compute adp choose co
 	
 	for (int i=0;i<K-1;i++){
 		TestIO::compute_adp_independence_mk_single(n, i+2 ); //our nr. partitions is from 2 to K
-		for(int j=0;j<n;j++){
+		for(int j=0;j<n-1;j++){
 			adp_mk[i*n+j]=adp[j];
 			adp_l_mk[i*n+j]=adp_l[j];
 			adp_r_mk[i*n+j]=adp_r[j];
@@ -510,22 +564,51 @@ void TestIO::compute_adp_independence_mk(int n, int K) { //compute adp choose co
 		adp   = new double[n];
 		adp_l = new double[n];
 		adp_r = new double[n];
+		
+		for(int i=0;i<n;i++){
+		  adp[i]=0;
+		  adp_l[i]=0;
+		  adp_r[i]=0;
+		}
 	}
 	
 	void TestIO::declare_adp_independence_mk(int n,int K){
 		adp_mk = new double[n*(K-1)+1];
 		adp_l_mk = new double[n*(K-1)+1];
 		adp_r_mk = new double[n*(K-1)+1];
+		
+		
+		for(int i=0;i<n*(K-1)+1;i++){
+		  adp_mk[i]=0;
+		  adp_l_mk[i]=0;
+		  adp_r_mk[i]=0;
+		}
+		
 	}
 	
 	void TestIO::declare_adp_k_sample(int n,int K){
 		adp = new double[n];
-		adp_l = new double[n];		
+		adp_l = new double[n];
+		
+		
+		for(int i=0;i<n;i++){
+		  adp[i]=0;
+		  adp_l[i]=0;
+		}
+		
+		
 	}
 	
 	void TestIO::declare_adp_k_sample_mk(int n,int K){
 			adp_mk = new double[n*(K-1)+1];
 			adp_l_mk = new double[n*(K-1)+1];
+			
+			
+			for(int i=0;i<n*(K-1)+1;i++){
+			  adp_mk[i]=0;
+			  adp_l_mk[i]=0;
+			}
+			
 	}
 
 
@@ -624,10 +707,12 @@ void ScoreConfigurable::parse_params(ScoreType st, double* extra_params_r) {
 		correct_mi_bias = extra_params_r[1];
 	} else if(st == UV_IND_ADP_MK){
 		correct_mi_bias = extra_params_r[0];
-		adp_mk_tables_nr = (int) extra_params_r[1];
+		equipartition_type = (int)extra_params_r[1];
+		equipartition_nr_cells_m = (int)extra_params_r[2];
+		adp_mk_tables_nr = (int) extra_params_r[3];
 		adp_mk_tables_m = new int[adp_mk_tables_nr];
 		adp_mk_tables_l = new int[adp_mk_tables_nr];
-		int  pointer = 2;
+		int  pointer = 4;
 		for(int i=0;i<adp_mk_tables_nr;i++){
 			adp_mk_tables_m[i]=(int) extra_params_r[pointer];
 			pointer ++;
@@ -643,13 +728,14 @@ void ScoreConfigurable::parse_params(ScoreType st, double* extra_params_r) {
 			}
 		}
 	}else if (st == UV_KS_DS ||st == UV_KS_MDS ) {
-		DS_type = (int)(extra_params_r[0]);
-		lambda = extra_params_r[1];
-		Mk_Maxk=(int)( extra_params_r[2]);
-		prior_length=(int)(extra_params_r[3]);
+		equipartition_type = (int)(extra_params_r[0]);
+		equipartition_nr_cells_m = (int)(extra_params_r[1]);
+		lambda = extra_params_r[2];
+		Mk_Maxk=(int)( extra_params_r[3]);
+		prior_length=(int)(extra_params_r[4]);
 		prior= new double[prior_length];
 		for(int i=0;i<prior_length;i++){
-			prior[i]=extra_params_r[i+4];
+			prior[i]=extra_params_r[i+5];
 		}
 	} else if (st == CI_UVZ_NN || st == CI_MVZ_NN) {
 		nnh = extra_params_r[0];
@@ -669,6 +755,8 @@ void ScoreConfigurable::parse_params(ScoreType st, double* extra_params_r) {
 		nr_stats += BASE_NR_STATS * nnh_grid_cnt;
 	} else if (IS_UV_KS_XDP_TEST(st) || IS_UV_GOF_XDP_TEST(st)) {
 		K = extra_params_r[0];
+		equipartition_type = (int)extra_params_r[1];
+		equipartition_nr_cells_m = (int)extra_params_r[2];
 	} else if (st == MV_KS_HHG_EXTENDED || st == MV_IND_HHG_EXTENDED) {
 		uv_score_type = (ScoreType)(extra_params_r[0]);
 		parse_params(uv_score_type, extra_params_r + 1);

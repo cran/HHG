@@ -2,14 +2,16 @@
 \alias{hhg.univariate.ks.combined.test}
 
 
-\title{The combined K-sample test statistics and their p-values}
+\title{Distribution-free K-sample tests}
 
-\description{Function for performing the combined  omnibus distribution-free test of equality of distributions among K groups, as described in Heller et al. (2014). The test combines statistics from a range of partition sizes. }
+\description{Performs distribution-free tests for equality of a univariate distribution across K groups. }
 
 \usage{
 hhg.univariate.ks.combined.test(X,Y=NULL,NullTable=NULL,mmin=2,
-  mmax=ifelse(is.null(Y),4,max(4,round(min(table(Y))/3))) ,
-  aggregation.type='sum',score.type='LikelihoodRatio' ,combining.type='MinP',nr.perm=1000)
+mmax=ifelse(is.null(Y),4,max(4,round(min(table(Y))/3))), aggregation.type='sum',
+score.type='LikelihoodRatio' ,combining.type='MinP',nr.perm=1000,
+variant='KSample-Variant', nr.atoms = nr_bins_equipartition(length(X)),
+compress=F,compress.p0=0.001,compress.p=0.99,compress.p1=0.000001,keep.simulation.data=T)
 }
 
 \arguments{
@@ -18,14 +20,35 @@ hhg.univariate.ks.combined.test(X,Y=NULL,NullTable=NULL,mmin=2,
   \item{NullTable}{The null table of the statistic, which can be downloaded from the software website or computed by the function \code{\link{hhg.univariate.ks.nulltable}}.}
   \item{mmin}{The minimum partition size of the ranked observations, default value is 2. Ignored if \code{NullTable} is non-null.}
   \item{mmax}{The maximum partition size of the ranked observations, default value is 1/3 the number of observations in the smallest group. Ignored if \code{NullTable} is non-null. }
-  \item{aggregation.type}{a character string specifying the aggregation type, must be one of \code{"sum"} (default), or \code{"max"}. Ignored if \code{NullTable} is non-null  or \code{X} is the test stiatistic.} 
-  \item{score.type}{a character string specifying the score type, must be one of \code{"LikelihoodRatio"} (default), or \code{"Pearson"}. Ignored if \code{NullTable} is non-null  or \code{X} is the test stiatistic. }
+  \item{aggregation.type}{a character string specifying the aggregation type, must be one of \code{"sum"} (default), or \code{"max"}. Ignored if \code{NullTable} is non-null  or \code{X} is the test statistic.} 
+  \item{score.type}{a character string specifying the score type, must be one of \code{"LikelihoodRatio"} (default), or \code{"Pearson"}. Ignored if \code{NullTable} is non-null  or \code{X} is the test statistic. }
   \item{combining.type}{a character string specifying the combining type, must be one of \code{"MinP"} (default), \code{"Fisher"}, or \code{"both"}.}
   \item{nr.perm}{The number of permutations for the null distribution. Ignored if \code{NullTable} is non-null.}
+  \item{variant}{Default value is \code{'KSample-Variant'}. Setting the variant to \code{'KSample-Equipartition'} performs the K-sample tests over partitions of the data where splits between cells are at least \eqn{n/nr.atoms} apart.}
+  \item{nr.atoms}{If \code{variant} is  \code{'KSample-Equipartition'}, this is the number of atoms (i.e., possible split points in the data). The default value is the minimum between \eqn{n} and \eqn{60+0.5*\sqrt n }.}
+  \item{compress}{a logical variable indicating whether you want to compress the null tables. If TRUE,  the lower \code{compress.p} part of the null statistics is kept at a \code{compress.p0} resolution, while the upper part is kept at a \code{compress.p1} resolution (which is finer).}
+   \item{compress.p0}{Parameter for compression. This is the resolution for the lower \code{compress.p} part of the null distribution.}
+  \item{compress.p}{Parameter for compression. Part of the null distribution to compress.}
+  \item{compress.p1}{Parameter for compression. This is the resolution for the upper value of the null distribution.}
+  \item{keep.simulation.data}{a logical variable indicating whether in addition to the sorted statistics per column, the original matrix of size nr.replicates by mmax-mmin+1 is also stored.Ignored if \code{NullTable} is non-null.}
 }
+ 
 
 \details{
-  The test statistic and p-value of the recommended test for the K-sample problem in Heller et al. (2014). The default combining type in the minimum p-value, so the test statistic is the minimum p-value over the range of partition sizes m from \code{mmin} to \code{mmax}, where the p-value for a fixed partition size m is defined by the aggregation type and score type . 
+  The function outputs test statistics and p-values of  the combined  omnibus distribution-free test of equality of distributions among K groups, as described in Heller et al. (2014). The test combines statistics from a range of partition sizes.
+ The default combining type is the minimum p-value, so the test statistic is the minimum p-value over the range of partition sizes m from \code{mmin} to \code{mmax}, where the p-value for a fixed partition size m is defined by the aggregation type and score type. The second type of combination method for statistics, is via a Fisher type statistic, \eqn{-\Sigma log(p_m)} (with the sum going from \eqn{mmin} to \eqn{mmax}). The returned result may include the test statistic for the \code{MinP} combination, the \code{Fisher} combination, or both (see \code{comb.type}).
+  
+  If the argument \code{NullTable} is supplied with a proper null table (constructed using \code{\link{hhg.univariate.ks.nulltable}}, for the K groups sample sizes), then the following test parameters are taken from \code{NullTable}:
+    (\code{ mmax, mmin} \code{, variant, aggregation.type}\code{, score.type, nr.atoms} ,...).
+  
+  If \code{NullTable} is left \code{NULL}, a null table is generated by a call to \code{\link{hhg.univariate.ks.nulltable}} using the arguments supplied to this function. The null table is generated with \code{nr.perm} repetitions. It is stored in the returned object \code{generated_null_table}. When testing for multiple hypotheses with the same group sample sizes, it is computationally efficient to generate only one null table (using this function or \code{\link{hhg.univariate.ks.nulltable}}), and use it for all hypotehses testsed. Generated null tables hold the distribution of statistics for both combination types, (\code{comb.type=='MinP'} and \code{comb.type=='Fisher'}). 
+  
+  If \code{X} is supplied with a statistic (\code{UnivariateStatistic} object, returned by \code{\link{hhg.univariate.ks.stat}}), X must have the statistics (by \code{m}), required by either \code{NullTable} or the user supplied arguments \code{mmin} and \code{mmax}. If \code{X} has a larger \code{mmax} argument than the supplied null table object, the statistics which exceed the null table's \code{mmax} are not taken into consideration when computing the combined statistic.
+  
+  Variant type \code{"KSample-Equipartition"} is the atom based version of the K-sample test. Calculation time is reduced by aggregating over a subset of partitions, where a split between cells may be performed only every \eqn{n/nr.atoms} observations. Atom based tests are available when  \code{aggregation.type} is set to \code{'sum'} or \code{'max'}.
+  
+  Null tables may be compressed, using the \code{compress} argument. For each of the partition sizes, the null distribution is held at a \code{compress.p0} resolution up to the \code{compress.p} percentile. Beyond that value, the distribution is held at a finer resolution defined by \code{compress.p1} (since higher values are attained when a relation exists in the data, this is required for computing the p-value accurately in the tail of the null distribution.)
+  
 }
 
 \value{
@@ -57,10 +80,18 @@ Returns a \code{UnivariateStatistic} class object, with the following entries:
   
   \item{mmin}{The minimum partition size of the ranked observations used for MinP or Fisher test statistic.}
   
+  \item{nr.atoms}{The input \code{nr.atoms}.}
+  
 }
 
 \references{
-Heller, R., Heller, Y., Kaufman S., Brill B, & Gorfine, M. (2014). Consistent distribution-free K-sample and independence tests for univariate random variables \emph{arXiv:1410.6758}.
+
+Heller, R., Heller, Y., Kaufman S., Brill B, & Gorfine, M. (2016). Consistent Distribution-Free K-Sample and Independence Tests for Univariate Random Variables, JMLR 17(29):1-54
+\url{http://www.jmlr.org/papers/volume17/14-441/14-441.pdf}
+
+Brill B. (2016) Scalable Non-Parametric Tests of Independence (master's thesis)
+\url{http://primage.tau.ac.il/libraries/theses/exeng/free/2899741.pdf}
+
 }
 
 \author{
@@ -94,14 +125,16 @@ generated.null.table = results$generated_null_table
 #null table for aggregation by summation: 
 sum.nulltable = hhg.univariate.ks.nulltable(c(N0,N1), nr.replicates=1000) 
 
-MinP.Sm.existing.null.table = hhg.univariate.ks.combined.test(X,Y, NullTable = sum.nulltable)
+MinP.Sm.existing.null.table = hhg.univariate.ks.combined.test(X,Y,
+NullTable = sum.nulltable)
 
 #Results
 MinP.Sm.existing.null.table
 
 # combined test can also be performed by using the test statistic.
 Sm.statistic = hhg.univariate.ks.stat(X,Y)
-MinP.using.statistic = hhg.univariate.ks.combined.test(Sm.statistic, NullTable = sum.nulltable)
+MinP.using.statistic = hhg.univariate.ks.combined.test(Sm.statistic,
+NullTable = sum.nulltable)
 # same result as above
 MinP.using.statistic$MinP.pvalue
 
@@ -113,6 +146,35 @@ max.nulltable = hhg.univariate.ks.nulltable(c(N0,N1), aggregation.type = 'max',
 MinPFisher.Mm.result = hhg.univariate.ks.combined.test(X,Y,NullTable =  max.nulltable ,
   combining.type = 'Both')
 MinPFisher.Mm.result
+
+
+#III) Perform MinP & Fisher Tests for extremly large n
+
+#Two groups, each from a different normal mixture, total sample size is 10^4:
+X_Large = c(c(rnorm(2500,-2,0.7),rnorm(2500,2,0.7)),
+c(rnorm(2500,-1.5,0.5),rnorm(2500,1.5,0.5)))
+Y_Large = (c(rep(0,5000),rep(1,5000)))
+plot(Y_Large,X_Large)
+
+
+N0_large = 5000
+N1_large = 5000
+
+Sm.EQP.null.table = hhg.univariate.ks.nulltable(c(N0_large,N1_large), nr.replicates=200,
+variant = 'KSample-Equipartition', mmax = 30)
+Mm.EQP.null.table = hhg.univariate.ks.nulltable(c(N0_large,N1_large), nr.replicates=200,
+aggregation.type='max', variant = 'KSample-Equipartition', mmax = 30)
+
+MinPFisher.Sm.EQP.result = hhg.univariate.ks.combined.test(X_Large, Y_Large,
+NullTable =  Sm.EQP.null.table ,
+  combining.type = 'Both')
+MinPFisher.Sm.EQP.result
+
+MinPFisher.Mm.EQP.result = hhg.univariate.ks.combined.test(X_Large, Y_Large,
+NullTable =  Mm.EQP.null.table ,
+  combining.type = 'Both')
+MinPFisher.Mm.EQP.result
+
 
 
 }

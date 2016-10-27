@@ -62,6 +62,8 @@ protected:
 	void uv_ind_adp(void);
 	void uv_ind_adp_mk(void);
 	
+	void uv_ind_opt_ddp2(void);
+	void uv_ind_opt_hoeffding(void);
 
 	void mv_ts_hhg(void);
 	void mv_ks_hhg(void);
@@ -95,11 +97,13 @@ protected:
 	void compute_ordered_ranks(int n, double* xx, int* yy);
 	void compute_single_integral(int n, double* xx, int* yy);
 	void compute_double_integral(int n, double* xx, int* yy);
+	void compute_double_integral_eqp(long n, double* xx, int* yy,long nr_atoms);
 	int count_sample_points_in_rect(int xl, int xh, int yl, int yh);
+	long count_sample_points_in_rect_eqp(long xl, long xh, long yl, long yh);
 	double count_ddp_with_given_cell(int xl, int xh, int yl, int yh);
 	double count_adp_with_given_cell(int xl, int xh, int yl, int yh);
-	int compute_adp_mk_cell_type(int xl, int xh, int yl, int yh);
-	double count_adp_mk_cell_type(int M,int L,int type, int w, int h);
+	int compute_adp_mk_cell_type(long xl, long xh, long yl, long yh,long nr_atoms);
+	double count_adp_mk_cell_type(int M,int L,int type, long w, long h,long nr_atoms);
 
 	int my_rand(int lo, int hi);
 	int my_R_rand_wrapper();
@@ -147,6 +151,9 @@ protected:
 	void uvs_ind_adp(void);
 	void uvs_ind_adp_mk(void);
 	
+	void uvs_ind_opt_ddp2(void);
+	void uvs_ind_opt_hoeffding(void);
+	
 	void (StatsComputer::*compute_score)(void);
 	void (StatsComputer::*resample)(void);
 	void (StatsComputer::*hhg_extended_uvs)(void);
@@ -190,10 +197,12 @@ protected:
 	int *x_ordered_by_y, *y_ordered_by_x;
 	double *tbl_o, *tbl_e;
 	int* double_integral;
+	int* double_integral_eqp;
 	int dintegral_zero_based_idxs;
 	int dintegral_pn;
+	int dintegral_pn_eqp;
 	double *kw_rs;
-	int **ds_ctab, *ds_idx;
+	int **ds_ctab, *ds_idx,**ds_ctab_bins;
 	double *ds_score, *ds_counts , *ds_score_pearson; //originally ds_score was the only score for the likelihood as implemented by the dynamic slicing paper, we later added a pearson variant.
 
 protected:

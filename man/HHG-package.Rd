@@ -3,27 +3,29 @@
 \alias{HHG}
 \docType{package}
 \title{Heller-Heller-Gorfine (HHG) Tests of Independence and Equality of Distributions}
-\description{This R package implements the  permutation test of independnece between two random vectors of arbitrary dimensions, and equality of two or more multivariate distributions, introduced in Heller et al. (2013), as well as the distribution-free tests of independence and equality of distribution between two univariate random variables introduced in Heller et al. (2014).}
+\description{This R package implements the  permutation test of independnece between two random vectors of arbitrary dimensions, and equality of two or more multivariate distributions, introduced in Heller et al. (2013), as well as the distribution-free tests of independence and equality of distribution between two univariate random variables introduced in Heller et al. (2016).}
 \details{
 \tabular{ll}{
 Package: \tab HHG\cr
 Type: \tab Package\cr
-Version: \tab 1.5.1\cr
-Date: \tab 2015-07-13\cr
+Version: \tab 2.0\cr
+Date: \tab 2016-10-25\cr
 License: \tab GPL-2\cr
 }
 
-The package contains five major functions:
+The package contains six major functions:
 
-\code{hhg.test} - the permutation test for independence of two multivariate (or univariate) vectors.
+\code{\link{hhg.test}} - the permutation test for independence of two multivariate (or univariate) vectors.
 
-\code{hhg.test.k.sample} - the permutation test for equality of a multivariate (or univariate) distribution across K groups.
+\code{\link{hhg.test.k.sample}} - the permutation test for equality of a multivariate (or univariate) distribution across K groups.
 
-\code{hhg.test.2.sample} - the permutaiton test for equality of a multivariate (or univariate) distribution across 2 groups.
+\code{\link{hhg.test.2.sample}} - the permutation test for equality of a multivariate (or univariate) distribution across 2 groups.
 
-\code{hhg.univariate.ind.combined.test} - the distribution-free test for independence of two univariate random variables.
+\code{\link{hhg.univariate.ind.combined.test}} - the distribution-free test for independence of two univariate random variables (due to the computational complexity of this function, for large  sample sizes we recommend the atom based test \code{\link{Fast.independence.test}} instead).
 
-\code{hhg.univariate.ks.combined.test} - the distribution-free test for equality of a univariate distribution across K groups.
+\code{\link{hhg.univariate.ks.combined.test}} - the distribution-free test for equality of a univariate distribution across K groups. 
+
+\code{\link{Fast.independence.test}} -  the atom based distribution-free test for independence of two univariate random variables, which is computationally efficient for large data sets (recommended for sample sizes greater than 100).
 
 See \code{vignette('HHG')} for additional information. 
 }
@@ -34,7 +36,12 @@ Maintainer: Barak Brill <barakbri@mail.tau.ac.il>
 \references{
 Heller, R., Heller, Y., and Gorfine, M. (2013). A consistent multivariate test of association based on ranks of distances. \emph{Biometrika}, 100(2), 503-510.
 
-Heller, R., Heller, Y., Kaufman S., Brill B., and Gorfine, M. (2014). Consistent distribution-free K-sample and independence tests for univariate random variables \emph{arXiv:1410.6758}.
+Heller, R., Heller, Y., Kaufman S., Brill B, & Gorfine, M. (2016). Consistent Distribution-Free K-Sample and Independence Tests for Univariate Random Variables, \emph{JMLR} 17(29):1-54
+\url{http://www.jmlr.org/papers/volume17/14-441/14-441.pdf}
+
+Brill B. (2016) Scalable Non-Parametric Tests of Independence (master's thesis).
+\url{http://primage.tau.ac.il/libraries/theses/exeng/free/2899741.pdf}
+
 }
 
 \examples{
@@ -46,6 +53,7 @@ Heller, R., Heller, Y., Kaufman S., Brill B., and Gorfine, M. (2014). Consistent
 #######################################
 #1. Univariate Independence Example
 #######################################
+#For (N<100):
 
 N = 30
 data = hhg.example.datagen(N, 'Parabola')
@@ -53,14 +61,14 @@ X = data[1,]
 Y = data[2,]
 plot(X,Y)
 
-#Option 1: Perform the ADP combined test
+#For (N<100) , Option 1: Perform the ADP combined test
 #using partitions sizes up to 4. see documentation for other parameters of the combined test 
 #(it is recommended to use mmax >= 4, or the default parameter for large data sets)
 combined = hhg.univariate.ind.combined.test(X,Y,nr.perm = 200,mmax=4)
 combined
 
 
-#Option 2: Perform the hhg test:
+#For (N<100) , Option 2: Perform the hhg test:
 
 ## Compute distance matrices, on which the HHG test will be based
 Dx = as.matrix(dist((X), diag = TRUE, upper = TRUE))
@@ -69,6 +77,23 @@ Dy = as.matrix(dist((Y), diag = TRUE, upper = TRUE))
 hhg = hhg.test(Dx, Dy, nr.perm = 1000)
 
 hhg
+
+#For N>100, Fast.independence.test is the reccomended option:
+
+N_Large = 1000
+data_Large = hhg.example.datagen(N_Large, 'W')
+X_Large = data_Large[1,]
+Y_Large = data_Large[2,]
+plot(X_Large,Y_Large)
+
+
+NullTable_for_N_Large_MXL_tables = Fast.independence.test.nulltable(N_Large, variant = 'ADP-EQP-ML',
+nr.atoms = 30,nr.perm=200)
+
+
+ADP_EQP_ML_Result = Fast.independence.test(X_Large,Y_Large, NullTable_for_N_Large_MXL_tables)
+
+ADP_EQP_ML_Result
 
 #######################################
 #2. Univariate K-Sample Example
@@ -82,14 +107,13 @@ Y = (c(rep(0,N0),rep(1,N1)))
 plot(Y,X)
 
 
-#Option 1: Perform the Sm combined test
-
-
+#Option 1: Perform the distribution-free test for equality of a univariate distribution
 combined.test = hhg.univariate.ks.combined.test(X,Y)
 combined.test
 
 
-#Option 2: Perform the hhg K-sample test:
+
+#Option 2: Perform the permutation test for equality of distributions.
 
 
 Dx = as.matrix(dist(X, diag = TRUE, upper = TRUE))
