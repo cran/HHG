@@ -108,7 +108,7 @@ Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate: a pr
 \note{
   The computational complexity of the test is \code{n^2*log(n)}, where \code{n} is the number of samples. Thus, when the sample size is large, computing the test for many permutations may take a long time.
   
-  P-values are reproducible when setting set.seed(seed_value) before peforming the permutation test (also when computation is done in multithread).
+  P-values are reproducible when setting set.seed(seed_value) before peforming the permutation test (also when computation is done in multithread). This feature is currently implemented only in \code{hhg.test} and not in \code{hhg.test.k.sample} and \code{hhg.test.2.sample}.
 }
 
 \examples{
@@ -168,7 +168,6 @@ n = 50
 D = hhg.example.datagen(n, 'FourClassUniv')
 Dx = as.matrix(dist(D$x, diag = TRUE, upper = TRUE))
 
-set.seed(1) #set the seed for the random permutations
 hhg = hhg.test.k.sample(Dx, D$y, nr.perm = 1000)
 
 hhg

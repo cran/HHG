@@ -4001,7 +4001,7 @@ void StatsComputer::uvs_ind_adp_mk(void) {
 	uvs_ml = 0;
 
 	long rect_o, xh, yh;
-	double cnt, rect_e, rect_c, rect_l,rect_o_double;
+	double rect_e, rect_c, rect_l,rect_o_double;
 	
 	double edenom = 1.0 / n; // This makes much more sense (and is for partitions between ranks rather than at ranks)
 
@@ -4020,7 +4020,7 @@ void StatsComputer::uvs_ind_adp_mk(void) {
 	// Now compute the score using all rectangles
 
 	
-	double nr_nonempty_cells = 0;
+	//double nr_nonempty_cells = 0;
 	long dim_size=wmax_limit+1; 
 	double* cells_likelihood_array = new double[dim_size*dim_size*9];// for holding the counts by cell type and window sizes;
 	double* cells_likelihood_kahan = new double[dim_size*dim_size*9];
@@ -4099,9 +4099,7 @@ void StatsComputer::uvs_ind_adp_mk(void) {
 							cells_chisq_array[current_index] +=  ((rect_o_double - rect_e) * (rect_o_double - rect_e)) / rect_e;
 							cells_likelihood_array[current_index] += ((rect_o_double > 0) ? (rect_o_double * log(rect_o_double / rect_e)) : 0);
 						}
-						if (rect_o > 0) {
-							nr_nonempty_cells += cnt;
-						}
+						
 					}
 				}
 			}

@@ -81,7 +81,9 @@ hhg.test.k.sample = function(Dx, y, w.sum = 0, w.max = 2, nr.perm = 10000,
   if (max(y) > 10) {
     warning('the K-sample test is appropriate for small values of K, consider using the general test, implemented by hhg.test')
   }
-  
+  if(nr.threads!=1){
+    warning('Note: hhg.test.k.sample has reproducible permutation P-value only on nr.threads=1')
+  }
   test_type = .MV_KS_HHG
   
   dummy.Dy = 0
@@ -128,6 +130,9 @@ hhg.test.2.sample = function(Dx, y, w.sum = 0, w.max = 2, nr.perm = 10000,
   }
   if (nr.perm < 0) {
     stop('nr.perm should not be negative')
+  }
+  if(nr.threads!=1){
+    warning('Note: hhg.test.2.sample has reproducible permutation P-value only on nr.threads=1')
   }
   if (is.factor(y)) {
     y = as.numeric(levels(y))[y]

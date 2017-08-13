@@ -1,6 +1,6 @@
 #function for message on load
 .onAttach <- function(libname, pkgname){
-  packageStartupMessage("HHG Ver. 2.0 - package for non parametric tests of independence and equality of distributions.")
+  packageStartupMessage("HHG Ver. 2.1 - package for non parametric tests of independence and equality of distributions.")
   packageStartupMessage("type vignette(\'HHG\') or ?HHG for documentation, examples and a quickstart guide.")
   packageStartupMessage("use suppressPackageStartupMessages(library(HHG)) to suppress this message.")
 }
@@ -1469,7 +1469,7 @@ hhg.univariate.ks.combined.test=function(X,Y=NULL,NullTable=NULL,mmin=2,mmax=ife
           stop('X and Y not of the same length')
       }
     }
-    .hhg.univariate.check.inputs('KSample',current_variant,current_size,current_score.type,current_aggregation.type)
+    .hhg.univariate.check.inputs('KSample',current_variant,current_size,current_score.type,current_aggregation.type,nr.atoms = current_nr.atoms)
     #generate null table
     current_null_table = hhg.univariate.ks.nulltable(current_size,current_mmin,current_mmax,current_variant,current_aggregation.type,current_score.type,nr.replicates = nr.perm,nr.atoms = current_nr.atoms,compress = compress,compress.p0 = compress.p0,compress.p = compress.p,compress.p1 = compress.p1,keep.simulation.data = keep.simulation.data)
   }else{ #null table is given, we have to check if its of the correct type

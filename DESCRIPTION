@@ -2,8 +2,8 @@ Package: HHG
 Type: Package
 Title: Heller-Heller-Gorfine Tests of Independence and Equality of
         Distributions
-Version: 2.0
-Date: 2016-10-25
+Version: 2.1
+Date: 2017-07-23
 Author: Barak Brill & Shachar Kaufman, based in part on an earlier
     implementation by Ruth Heller and Yair Heller.
 Maintainer: Barak Brill <barakbri@mail.tau.ac.il>
@@ -17,7 +17,7 @@ Description: Heller-Heller-Gorfine ('HHG') tests are a set of powerful statistic
 License: GPL-2
 VignetteBuilder: knitr
 NeedsCompilation: yes
-Packaged: 2016-10-26 18:56:46 UTC; Barak
+Packaged: 2017-08-12 21:16:58 UTC; Barak
 RoxygenNote: 5.0.1
 Repository: CRAN
-Date/Publication: 2016-10-27 00:26:24
+Date/Publication: 2017-08-13 18:54:55 UTC
