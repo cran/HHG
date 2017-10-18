@@ -1,6 +1,6 @@
 #function for message on load
 .onAttach <- function(libname, pkgname){
-  packageStartupMessage("HHG Ver. 2.1 - package for non parametric tests of independence and equality of distributions.")
+  packageStartupMessage("HHG Ver. 2.2 - package for non parametric tests of independence and equality of distributions.")
   packageStartupMessage("type vignette(\'HHG\') or ?HHG for documentation, examples and a quickstart guide.")
   packageStartupMessage("use suppressPackageStartupMessages(library(HHG)) to suppress this message.")
 }
@@ -69,21 +69,26 @@ hhg.univariate.ind.stat = function(x, y, variant = 'ADP',aggregation.type='sum',
   
   .hhg.univariate.check.inputs(type,variant,length(x),score.type,aggregation.type,nr.atoms = nr.atoms)
   max_not_available=TRUE
-  if (((variant == 'DDP') && ((mmax <= 4))) || ((variant == 'ADP') && ((mmax <= 2)))) {
+  if (((variant == 'DDP') && ((mmax <= 4)))) {
     max_not_available=FALSE
   }
+  if (((variant %in% c('ADP','ADP-ML', 'ADP-EQP', 'ADP-EQP-ML')) && ((mmax <= 3)))) {
+    max_not_available=FALSE
+  }
+
   if(max_not_available == TRUE  & is.element(aggregation.type,c('max'))){
     stop(" Maximum based scores only available for ADP with m=2 and DDP with m=2,3,4")
   }
   if(max_not_available == TRUE  & is.element(aggregation.type,c('both'))){
     warning(" Maximum based scores only available for ADP with m=2 and DDP with m=2,3,4")
   }
-  if(is.element(variant,c('ADP-EQP','ADP-ML','ADP-EQP-ML')) & is.element(aggregation.type,c('max','both'))){
-    stop(" Maximum based scores not available for 'ADP-EQP' , 'ADP-ML' or 'ADP-EQP-ML'. ")
-  }
-  if(is.element(variant,c('ADP','ADP-EQP','ADP-ML','ADP-EQP-ML')) & correct.mi.bias == F & aggregation.type == 'sum'){
+  #if(is.element(variant,c('ADP-EQP','ADP-ML','ADP-EQP-ML')) & is.element(aggregation.type,c('max','both'))){
+  #  stop(" Maximum based scores not available for 'ADP-EQP' , 'ADP-ML' or 'ADP-EQP-ML'. ")
+  #}
+  if(is.element(variant,c('ADP','ADP-EQP','ADP-ML','ADP-EQP-ML')) & correct.mi.bias == F & is.element(aggregation.type, c('sum','both'))){
     flag_perform_ADP_multiple_partitions = T
   }
+  
   if(correct.mi.bias == T & is.element(variant,c('ADP-EQP','ADP-ML','ADP-EQP-ML'))){
     stop('The following variants do not support MI bias correction: ADP-EQP, ADP-ML and ADP-EQP-ML')
   }
@@ -101,6 +106,32 @@ hhg.univariate.ind.stat = function(x, y, variant = 'ADP',aggregation.type='sum',
   }
   do.nonregular = F
   do.nonregular.type = NA
+
+  #check if we need to run maximum variants
+  do.HHGRcpp.maximum.variants = F
+  if(!max_not_available){
+    if(is.element(variant,c('ADP','ADP-ML','ADP-EQP','ADP-EQP-ML')) & is.element(aggregation.type,c('max','both'))){
+      do.HHGRcpp.maximum.variants  = T
+    }  
+  }
+  skip.ADP.only.MAX = F
+  if(is.element(variant,c('ADP','ADP-ML','ADP-EQP','ADP-EQP-ML')) & is.element(aggregation.type,c('max'))){
+    skip.ADP.only.MAX = T
+  }
+  
+  #currently, bias correction is not available for max variants.
+  # If the user asked for max variants with bias correction,
+  # we remove the bias correction request, and warn the user.
+  if(do.HHGRcpp.maximum.variants && correct.mi.bias){
+    correct.mi.bias = F
+    warning('MI bias correction not available for maximum based variants,
+            disabled for all statistics')
+  }
+  
+  #ADP-ML and ADP-EQP-ML make use of ml indexing functions that assume mmin<mmax strictly.
+  if(mmax==mmin & is.element(variant,c('ADP-ML','ADP-EQP-ML'))){
+    stop('Variants ADP-ML and ADP-EQP-ML require mmax>mmin, currently mmax==mmin.')
+  }
   
   #statistics computation:
   stat.sl = rep(NA,(mmax)-mmin+1)
@@ -128,7 +159,7 @@ hhg.univariate.ind.stat = function(x, y, variant = 'ADP',aggregation.type='sum',
     stat.sl = res$sum.lr
     stat.sc = res$sum.chisq
     
-  }else{
+  }else if(!skip.ADP.only.MAX){
     ms_vector=(mmin:mmax)
    for(i in 1:length(ms_vector)){
      m=ms_vector[i]
@@ -195,7 +226,41 @@ hhg.univariate.ind.stat = function(x, y, variant = 'ADP',aggregation.type='sum',
    titles = paste0('m.',as.character(mmin:mmax),'X',as.character(mmin:mmax))
   }
   
-  
+  if(do.HHGRcpp.maximum.variants){
+    m_param = NULL
+    l_param = NULL
+    eqp_param=NULL
+    create_params = .ml_by_variant(variant,mmin,mmax)
+    m_param = create_params$m_param
+    l_param = create_params$l_param
+    titles = create_params$titles
+    max_variant_nr_atoms = NA
+    if(variant %in% c('ADP','ADP-ML')){
+      max_variant_nr_atoms = length(x)
+    }else if(variant %in% c('ADP-EQP','ADP-EQP-ML')){
+      max_variant_nr_atoms = nr.atoms
+    }
+    for(i in 1:length(m_param)){
+      res = NA
+      if(m_param[i] == 2 && l_param[i] == 2){
+        res = ADP_MAX_2X2_statistic(x,y,max_variant_nr_atoms,w.max = w.max)   
+      }
+      if(m_param[i] == 3 && l_param[i] == 2){
+        res = ADP_MAX_3X2_statistic(x,y,max_variant_nr_atoms,w.max = w.max)   
+      }
+      if(m_param[i] == 2 && l_param[i] == 3){
+        res = ADP_MAX_3X2_statistic(y,x,max_variant_nr_atoms,w.max = w.max)    
+      }
+      if(m_param[i] == 3 && l_param[i] == 3){
+        res = ADP_MAX_3X3_statistic(x,y,max_variant_nr_atoms,w.max = w.max)   
+      }
+      
+      stat.ml[i] = res$loglik.max
+      stat.mc[i] = res$chisq.max
+      
+    }
+    
+  }
   
   flag_SL = (score.type=='LikelihoodRatio' || score.type=='both') & ( aggregation.type=='sum' || aggregation.type=='both')
   flag_SC = (score.type=='Pearson' || score.type=='both') & ( aggregation.type=='sum' || aggregation.type=='both')
@@ -547,7 +612,11 @@ print.UnivariateStatistic = function(x,...){
   }
   if('max.lr' %in% names(x)){
     cat(paste0('Maximum over Likelihood Ratio scores of Partitions, by partition size: \n'))
-    print(round(x$max.lr,digits = 3))
+    if(x$variant %in% c('ADP-ML','ADP-EQP-ML')){
+      .print.ml.pretty(x$max.lr,x$mmin,x$mmax)
+    }else{
+      print(round(x$max.lr,digits = 3))
+    }
     cat('\n')
     
   }
@@ -559,11 +628,14 @@ print.UnivariateStatistic = function(x,...){
       print(round(x$sum.chisq,digits = 3))
     }
     cat('\n')
-    
   }
   if('max.chisq' %in% names(x)){
     cat(paste0('Maximum over Pearson Chi Square scores of Partitions, by partition size:  \n'))
-    print(round(x$max.chisq,digits = 3))
+    if(x$variant %in% c('ADP-ML','ADP-EQP-ML')){
+      .print.ml.pretty(x$max.chisq,x$mmin,x$mmax)
+    }else{
+      print(round(x$max.chisq,digits = 3))
+    }
     cat('\n')
     
   }
@@ -777,12 +849,12 @@ print.UnivariateStatistic = function(x,...){
   if(mmax-mmin>0){
     ind=apply(p.val[,1:(mmax-mmin+1)],1,which.min) # before na check
   }else{
-    ind=rep(2,nrow(p.val))
+    ind=rep(mmin,nrow(p.val))
   }
   if(MESSAGES){     print("Generating : writing results")   }
   for(ri in 1:nr.row){
     
-    if(mmax>2){
+    if(mmax-mmin>0){
       Statistic[ri]=p.val[ri,ind[ri]]
       Fisher[ri]=(-1)*sum(log(p.val[ri,(1 ):(mmax-mmin+1)]))
     }else{
