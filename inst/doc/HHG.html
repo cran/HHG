@@ -18,7 +18,7 @@
 
 
 <style type="text/css">code{white-space: pre;}</style>
-<style type="text/css">
+<style type="text/css" data-origin="pandoc">
 div.sourceCode { overflow-x: auto; }
 table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
   margin: 0; padding: 0; vertical-align: baseline; border: none; }
@@ -54,7 +54,29 @@ code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
 code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
 code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
 code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+
 </style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    for (var j = 0; j < rules.length; j++) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") continue;
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' || rule.style.backgroundColor === '') continue;
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
 
 
 
@@ -213,7 +235,7 @@ hhg</code></pre></div>
 <p>Tests in the package are <em>Omnibus Consistent</em>, meaning, given enough data, they will be able to reject the null hypothesis of independence (or equality of distribution in the K-Sample case) for <strong>any</strong> type of relationship.</p>
 <p>Some of the tests come with a variety of tuning parameters, but the default parameters will work just fine for most problems.</p>
 <p>In this vignette, we will go over the different tests in the package, describe (very generally) how they work, how to operate them, and some key switches that can be used to tune them to your problem.</p>
-<p>The computation of the hhg.univariate statistics can be quite extensive. Thus, existing null tables (lookup tables for the null distributions, from which pvalues can be computed) can be found at our website: <a href="http://www.math.tau.ac.il/~ruheller/Software.html" class="uri">http://www.math.tau.ac.il/~ruheller/Software.html</a>. Section 4.6 of this document also explains how to compute a null tables on the same machine, using multiple cores (both for the independence problem, and for the K-sample problem).</p>
+<p>The computation of the hhg.univariate statistics can be quite extensive. Thus, existing null tables (lookup tables for the null distributions, from which pvalues can be computed) can be found at our <a href="https://bit.ly/2MKl8sh">website</a>. Section 4.6 of this document also explains how to compute a null tables on the same machine, using multiple cores (both for the independence problem, and for the K-sample problem).</p>
 <p>If you have generated a high precision null table, we would like to use it on our site, so that it is also available for other research groups, so please share it with us!</p>
 <p>Please do not hesitate to contact us with any question regarding the package or statistical procedures, we will be happy to help.</p>
 </div>
@@ -342,7 +364,7 @@ combined.test</code></pre></div>
 <h2>Using null tables from the website</h2>
 <p>This section shows how to use one of the null.tables on the site, and convert it to a null table object. Note that all tables are also already availalble in object format, using an mmax parameter defined for the maximum partition size taken into account (relevant for MinP and Fisher, typically with a value of 75, 100 or 150 for large sample sizes)</p>
 <p>How to convert an existing null table to a null table test object:</p>
-<div class="sourceCode"><pre class="sourceCode r"><code class="sourceCode r"><span class="co"># download from site http://www.math.tau.ac.il/~ruheller/Software.html</span>
+<div class="sourceCode"><pre class="sourceCode r"><code class="sourceCode r"><span class="co"># download from site https://bit.ly/2MKl8sh</span>
 
 <span class="co">#using an already ready null table as object (for use in test functions)</span>
 <span class="co">#for example, ADP likelihood ratio statistics, for the independence problem, for sample size n=300</span>

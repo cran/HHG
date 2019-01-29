@@ -196,7 +196,7 @@ set.seed(2)
 #  
 
 ## ---- eval=FALSE---------------------------------------------------------
-#  # download from site http://www.math.tau.ac.il/~ruheller/Software.html
+#  # download from site https://bit.ly/2MKl8sh
 #  
 #  #using an already ready null table as object (for use in test functions)
 #  #for example, ADP likelihood ratio statistics, for the independence problem, for sample size n=300
