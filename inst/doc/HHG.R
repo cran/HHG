@@ -1,7 +1,7 @@
 ## ----echo=FALSE---------------------------------------------------------------
 set.seed(2)
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  #For (N<100):
 #  N = 30
 #  data = hhg.example.datagen(N, 'Parabola')
@@ -47,7 +47,7 @@ set.seed(2)
 #  ADP_EQP_ML_Result
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  N0=50
 #  N1=50
@@ -75,7 +75,7 @@ set.seed(2)
 #  
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  n=30 #number of samples
 #  dimensions_x=5 #dimension of X matrix
@@ -97,7 +97,7 @@ set.seed(2)
 #  hhg
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  #multivariate k-sample, with k=3 groups
 #  n=100 #number of samples in each group
@@ -119,7 +119,7 @@ set.seed(2)
 #  hhg
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  N = 35
 #  data = hhg.example.datagen(N, 'Parabola')
@@ -140,7 +140,7 @@ set.seed(2)
 #  hhg.univariate.ind.pvalue(hhg.univariate.ADP.Likelihood.result, ADP.null)
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  #II) Computing test statistics , with summation over Data Derived Partitions (DDP), using Pearson scores, and partition sizes up to 5:
 #  
@@ -155,7 +155,7 @@ set.seed(2)
 #  hhg.univariate.ind.pvalue(hhg.univariate.DDP.Pearson.result, DDP.null, m =5)
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  N = 35
 #  data = hhg.example.datagen(N, 'Parabola')
@@ -170,7 +170,7 @@ set.seed(2)
 #  
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  #KS example - two groups of size 50
 #  N0=50
 #  N1=50
@@ -189,13 +189,13 @@ set.seed(2)
 #  hhg.univariate.ks.pvalue(statistic , nulltable,m=5) #pvalue of partition size 5
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  combined.test = hhg.univariate.ks.combined.test(X,Y,nulltable)
 #  combined.test
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  # download from site https://bit.ly/2MKl8sh
 #  
 #  #using an already ready null table as object (for use in test functions)
@@ -208,7 +208,7 @@ set.seed(2)
 #               variant = 'ADP',size = 300,score.type = 'LikelihoodRatio',aggregation.type = 'sum')
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  library(parallel)
 #  library(doParallel)
 #  library(foreach)
@@ -279,7 +279,7 @@ set.seed(2)
 #  
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  library(parallel)
 #  library(doParallel)
@@ -352,7 +352,7 @@ set.seed(2)
 #  res = HHG::hhg.univariate.ks.combined.test(x,y,nt_Mm_LR);res
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  #Option 1:
 #  # It is better to use the Fast.ADP.test, which has nr.atoms and paritition size m automatically set for large data:
 #  
@@ -424,7 +424,7 @@ set.seed(2)
 #  
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  
 #  #Two groups, each from a different normal mixture, total sample size is 10^4:
@@ -454,7 +454,7 @@ set.seed(2)
 #  
 #  
 
-## ---- eval=FALSE--------------------------------------------------------------
+## ----eval=FALSE---------------------------------------------------------------
 #  
 #  library(parallel)
 #  library(doParallel)
